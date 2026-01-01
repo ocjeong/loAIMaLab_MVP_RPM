@@ -1,401 +1,484 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.figure_factory as ff
-from datetime import datetime, timedelta
-import graphviz
-import io
-import base64
+from database import Database
+from llm_processor import LLMProcessor
+from utils import create_gantt_chart, export_to_excel
 import json
-import random
-import os
 
 # 페이지 설정
 st.set_page_config(
-    page_title="Auto-Test Planner",
-    page_icon="🔬",
+    page_title="RPM - Reliable Planning Manager",
+    page_icon="🔧",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# 앱 스타일 설정
+# 세션 상태 초기화
+if 'db' not in st.session_state:
+    st.session_state.db = Database()
+if 'llm' not in st.session_state:
+    st.session_state.llm = LLMProcessor()
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 'user_selection'
+if 'selected_user' not in st.session_state:
+    st.session_state.selected_user = None
+if 'selected_request' not in st.session_state:
+    st.session_state.selected_request = None
+if 'extracted_data' not in st.session_state:
+    st.session_state.extracted_data = None
+if 'plan_data' not in st.session_state:
+    st.session_state.plan_data = None
+
+# 스타일링
 st.markdown("""
-<style>
+    <style>
     .main-header {
         font-size: 2.5rem;
-        color: #1E3A8A;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
     }
     .sub-header {
         font-size: 1.5rem;
-        color: #2563EB;
-    }
-    .card {
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        background-color: #F3F4F6;
+        font-weight: bold;
+        color: #2c3e50;
+        margin-top: 1rem;
         margin-bottom: 1rem;
     }
-    .success-msg {
-        color: #047857;
-        font-weight: bold;
+    .info-box {
+        background-color: #e8f4f8;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #1f77b4;
+        margin-bottom: 1rem;
     }
-</style>
+    .success-box {
+        background-color: #d4edda;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #28a745;
+        margin-bottom: 1rem;
+    }
+    </style>
 """, unsafe_allow_html=True)
 
-# 세션 상태 초기화
-if 'current_step' not in st.session_state:
-    st.session_state.current_step = 1
-if 'extracted_data' not in st.session_state:
-    st.session_state.extracted_data = None
-if 'test_items' not in st.session_state:
-    st.session_state.test_items = None
-if 'history' not in st.session_state:
-    st.session_state.history = []
-if 'current_project' not in st.session_state:
-    st.session_state.current_project = None
 
-# 사이드바 - 이력 관리
-with st.sidebar:
-    st.markdown("### 프로젝트 이력")
+def user_selection_page():
+    """5.1 사용자 선택 화면"""
+    st.markdown('<div class="main-header">🔧 RPM - Reliable Planning Manager</div>', unsafe_allow_html=True)
     
-    # 샘플 이력 데이터
-    if len(st.session_state.history) == 0:
-        st.session_state.history = [
-            {"id": 1, "name": "A사 블로워 모터 검증", "date": "2026-01-01"},
-            {"id": 2, "name": "B사 신규 모델 평가", "date": "2025-12-15"}
-        ]
+    # 5.1.1 사용자 선택 메뉴
+    st.markdown('<div class="sub-header">👤 사용자 선택</div>', unsafe_allow_html=True)
+    users = st.session_state.db.get_all_users()
     
-    for item in st.session_state.history:
-        if st.button(f"{item['name']} ({item['date']})", key=f"history_{item['id']}"):
-            st.session_state.current_project = item['id']
-            st.session_state.current_step = 2  # 데이터 확인/수정 단계로 이동
-            st.experimental_rerun()
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        selected_user = st.selectbox(
+            "사용자를 선택하세요",
+            options=users,
+            key="user_selector"
+        )
+    with col2:
+        if st.button("➕ 새 사용자 추가"):
+            with st.form("new_user_form"):
+                new_user = st.text_input("사용자 이름")
+                if st.form_submit_button("추가"):
+                    st.session_state.db.add_user(new_user)
+                    st.success(f"사용자 '{new_user}' 추가 완료!")
+                    st.rerun()
     
-    st.divider()
-    st.markdown("### 도움말")
-    with st.expander("사용 방법"):
-        st.markdown("""
-        1. 테스트 스펙 문서를 업로드하세요
-        2. 추출된 데이터를 확인하고 필요시 수정하세요
-        3. 시험 계획 설정을 입력하세요
-        4. 생성된 계획을 확인하고 내보내세요
-        """)
-
-# 메인 콘텐츠
-st.markdown('<h1 class="main-header">Auto-Test Planner</h1>', unsafe_allow_html=True)
-st.markdown("#### 블로워 모터 시험 업무 자동화 솔루션")
-
-# 모의 데이터 생성 함수
-def mock_extract_data(file):
-    """문서에서 데이터를 추출하는 모의 함수"""
-    # 실제 구현에서는 LLM API를 호출하여 문서 파싱
-    mock_data = {
-        "standard_name": "ISO-12345 / JASO D409",
-        "product_name": "블로워 모터 XYZ-2000",
-        "test_items": [
-            {"id": 1, "name": "전압 변동 시험", "condition": "8V~16V", "criteria": "정상 작동", "duration_hours": 2, "priority": 3},
-            {"id": 2, "name": "내구성 시험", "condition": "12V, 상온", "criteria": "500시간 후 성능 유지", "duration_hours": 500, "priority": 5},
-            {"id": 3, "name": "소음 측정", "condition": "정격 전압", "criteria": "65dB 이하", "duration_hours": 1, "priority": 2},
-            {"id": 4, "name": "온도 상승 시험", "condition": "-40°C ~ 85°C", "criteria": "기능 이상 없음", "duration_hours": 24, "priority": 4},
-            {"id": 5, "name": "전류 소모 측정", "condition": "정격 전압", "criteria": "2A 이하", "duration_hours": 1, "priority": 1}
-        ]
-    }
-    return mock_data
-
-# 시험 항목 자동 시퀀싱 함수
-def sequence_test_items(test_items):
-    """시험 항목을 우선순위에 따라 정렬"""
-    # 우선순위에 따라 정렬 (낮은 숫자가 높은 우선순위)
-    return sorted(test_items, key=lambda x: x["priority"])
-
-# Gantt 차트 생성 함수
-def create_gantt_chart(test_items, start_date, sample_count):
-    """시험 일정을 Gantt 차트로 시각화"""
-    df = []
-    current_date = datetime.strptime(start_date, "%Y-%m-%d")
-    
-    for i, item in enumerate(test_items):
-        # 시료 수에 따라 병렬 처리 가능성 고려 (단순화를 위해 시료당 시간 증가)
-        duration = item["duration_hours"] * (1 + (sample_count - 1) * 0.2)  # 시료가 증가할수록 시간도 일부 증가
-        hours = int(duration)
-        days = hours // 8  # 하루 8시간 작업 기준
-        remainder_hours = hours % 8
+    if selected_user:
+        st.session_state.selected_user = selected_user
         
-        end_date = current_date + timedelta(days=days, hours=remainder_hours)
+        # 5.1.2 일정 확인 박스
+        st.markdown('<div class="sub-header">📅 이번 달 시험 일정</div>', unsafe_allow_html=True)
+        current_month = datetime.now().strftime("%Y-%m")
+        schedule_data = st.session_state.db.get_user_schedule(selected_user, current_month)
         
-        df.append(dict(
-            Task=item["name"],
-            Start=current_date,
-            Finish=end_date,
-            Resource="시험장비 " + str(i % 3 + 1)  # 장비 번호 (모의)
-        ))
+        if schedule_data:
+            fig = create_gantt_chart(schedule_data, title=f"{selected_user}의 전체 시험 일정")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("📋 등록된 시험 일정이 없습니다.")
         
-        current_date = end_date
-    
-    return df
-
-# 플로우차트 생성 함수
-def create_flowchart(test_items):
-    """시험 항목의 흐름을 시각화"""
-    dot = graphviz.Digraph()
-    dot.attr(rankdir='TB', size='8,5')
-    
-    # 노드 추가
-    dot.node('start', '시작', shape='oval', style='filled', fillcolor='lightblue')
-    for item in test_items:
-        dot.node(str(item["id"]), item["name"], shape='box', style='filled', fillcolor='lightgreen')
-    dot.node('end', '종료', shape='oval', style='filled', fillcolor='lightblue')
-    
-    # 엣지 추가
-    dot.edge('start', str(test_items[0]["id"]))
-    for i in range(len(test_items) - 1):
-        dot.edge(str(test_items[i]["id"]), str(test_items[i + 1]["id"]))
-    dot.edge(str(test_items[-1]["id"]), 'end')
-    
-    return dot
-
-# 엑셀 다운로드 함수
-def to_excel(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, sheet_name='Sheet1')
-    processed_data = output.getvalue()
-    return processed_data
-
-# 단계별 UI 렌더링
-if st.session_state.current_step == 1:
-    # 단계 1: 파일 업로드
-    st.markdown('<h2 class="sub-header">1. 테스트 스펙 문서 업로드</h2>', unsafe_allow_html=True)
-    
-    with st.container():
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("테스트 스펙 문서를 업로드하세요 (DOCX, PDF)", type=["docx", "pdf"])
+        col1, col2 = st.columns(2)
         
-        if uploaded_file is not None:
-            st.success(f"파일이 업로드되었습니다.")
+        with col1:
+            # 5.1.3 의뢰 선택 메뉴
+            st.markdown('<div class="sub-header">📂 기존 의뢰 선택</div>', unsafe_allow_html=True)
+            requests = st.session_state.db.get_user_requests(selected_user)
             
-            # 파일 처리 중 표시
-            with st.spinner('문서 분석 중...'):
-                # 모의 데이터 추출
-                extracted_data = mock_extract_data(uploaded_file)
-                st.session_state.extracted_data = extracted_data
-                st.session_state.test_items = extracted_data["test_items"]
-            
-            st.success('문서 분석이 완료되었습니다!')
-            
-            if st.button("다음 단계로", key="next_to_step2"):
-                st.session_state.current_step = 2
-                st.experimental_rerun()
+            if requests:
+                selected_request = st.selectbox(
+                    "의뢰를 선택하세요",
+                    options=requests,
+                    format_func=lambda x: f"{x['request_id']} - {x['created_at']}"
+                )
+                
+                if selected_request:
+                    st.session_state.selected_request = selected_request
+                    
+                    # 선택된 의뢰의 일정 표시
+                    request_schedule = st.session_state.db.get_request_schedule(
+                        selected_request['request_id']
+                    )
+                    if request_schedule:
+                        fig = create_gantt_chart(
+                            request_schedule, 
+                            title=f"의뢰 {selected_request['request_id']} 일정"
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # 5.1.5 의뢰 수정 버튼
+                    if st.button("✏️ 의뢰 수정", use_container_width=True):
+                        st.session_state.extracted_data = st.session_state.db.get_request_data(
+                            selected_request['request_id']
+                        )
+                        st.session_state.current_page = 'test_data'
+                        st.rerun()
+            else:
+                st.info("📋 등록된 의뢰가 없습니다.")
         
-        st.markdown('</div>', unsafe_allow_html=True)
+        with col2:
+            # 5.1.4 새 의뢰 버튼
+            st.markdown('<div class="sub-header">📤 새 의뢰 생성</div>', unsafe_allow_html=True)
+            uploaded_file = st.file_uploader(
+                "테스트 스펙 파일 업로드",
+                type=['pdf', 'docx'],
+                help="PDF 또는 DOCX 형식의 테스트 스펙 파일을 업로드하세요"
+            )
+            
+            if uploaded_file:
+                if st.button("🚀 새 의뢰 생성", use_container_width=True):
+                    with st.spinner("📄 문서 분석 중..."):
+                        # LLM을 통한 문서 파싱 및 데이터 추출
+                        extracted_data = st.session_state.llm.parse_document(uploaded_file)
+                        
+                        # 새 의뢰 ID 생성
+                        new_request_id = st.session_state.db.create_new_request(
+                            selected_user,
+                            uploaded_file.name
+                        )
+                        
+                        st.session_state.selected_request = {
+                            'request_id': new_request_id,
+                            'user': selected_user,
+                            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        st.session_state.extracted_data = extracted_data
+                        st.session_state.current_page = 'test_data'
+                        st.success("✅ 문서 추출 완료!")
+                        st.rerun()
 
-elif st.session_state.current_step == 2:
-    # 단계 2: 데이터 확인/수정
-    st.markdown('<h2 class="sub-header">2. 추출된 데이터 확인 및 수정</h2>', unsafe_allow_html=True)
+
+def test_data_page():
+    """5.2 시험 의뢰 항목 데이터 화면"""
+    st.markdown('<div class="main-header">📊 시험 의뢰 항목 데이터</div>', unsafe_allow_html=True)
+    
+    # 5.2.1 세션 정보 표시
+    st.markdown('<div class="info-box">', unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        st.write(f"**👤 사용자:** {st.session_state.selected_user}")
+    with col2:
+        st.write(f"**📋 의뢰 ID:** {st.session_state.selected_request['request_id']}")
+    with col3:
+        if st.button("🔙 돌아가기"):
+            st.session_state.current_page = 'user_selection'
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # 5.2.2 의뢰 추출 데이터 박스
+    st.markdown('<div class="sub-header">🔍 추출된 시험 항목</div>', unsafe_allow_html=True)
     
     if st.session_state.extracted_data:
-        data = st.session_state.extracted_data
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("#### 기본 정보")
-            standard_name = st.text_input("규격명", data["standard_name"])
-            product_name = st.text_input("제품명", data["product_name"])
-        
-        with col2:
-            st.markdown("#### 참조 문서")
-            st.info("관련 표준 문서 2개가 자동으로 매핑되었습니다.")
-            st.markdown("- ISO-12345: 자동차 전장부품 내구성 시험법")
-            st.markdown("- JASO D409: 블로워 모터 성능 평가 기준")
-        
-        st.markdown("#### 시험 항목")
-        
-        # 데이터 에디터로 시험 항목 수정 가능하게 함
-        test_items_df = pd.DataFrame(st.session_state.test_items)
-        edited_df = st.data_editor(
-            test_items_df,
-            column_config={
-                "id": "ID",
-                "name": "시험 항목명",
-                "condition": "시험 조건",
-                "criteria": "판정 기준",
-                "duration_hours": st.column_config.NumberColumn("소요 시간(시간)", min_value=0, format="%d"),
-                "priority": st.column_config.NumberColumn("우선순위", min_value=1, max_value=5, format="%d")
-            },
-            use_container_width=True,
-            num_rows="dynamic"
-        )
-        
-        # 수정된 데이터 저장
-        st.session_state.test_items = edited_df.to_dict('records')
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("이전 단계로", key="back_to_step1"):
-                st.session_state.current_step = 1
-                st.experimental_rerun()
-        with col2:
-            if st.button("다음 단계로", key="next_to_step3"):
-                st.session_state.current_step = 3
-                st.experimental_rerun()
-    else:
-        st.error("추출된 데이터가 없습니다. 문서를 다시 업로드해주세요.")
-        if st.button("문서 업로드로 돌아가기"):
-            st.session_state.current_step = 1
-            st.experimental_rerun()
-
-elif st.session_state.current_step == 3:
-    # 단계 3: 계획 수립 설정
-    st.markdown('<h2 class="sub-header">3. 시험 계획 설정</h2>', unsafe_allow_html=True)
+        # Expandable tree view로 데이터 표시
+        for idx, test_item in enumerate(st.session_state.extracted_data):
+            with st.expander(f"🧪 {test_item.get('test_name', f'시험 항목 {idx+1}')}"):
+                # 편집 가능한 폼
+                test_item['test_name'] = st.text_input(
+                    "시험 명칭",
+                    value=test_item.get('test_name', ''),
+                    key=f"name_{idx}"
+                )
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    test_item['category'] = st.text_input(
+                        "시험 분류",
+                        value=test_item.get('category', ''),
+                        key=f"category_{idx}"
+                    )
+                    test_item['temperature'] = st.text_input(
+                        "온도 조건",
+                        value=test_item.get('temperature', ''),
+                        key=f"temp_{idx}"
+                    )
+                    test_item['voltage'] = st.text_input(
+                        "전압 조건",
+                        value=test_item.get('voltage', ''),
+                        key=f"voltage_{idx}"
+                    )
+                
+                with col2:
+                    test_item['cycles'] = st.number_input(
+                        "사이클 수",
+                        value=int(test_item.get('cycles', 0)),
+                        key=f"cycles_{idx}"
+                    )
+                    test_item['duration_hours'] = st.number_input(
+                        "예상 소요 시간 (시간)",
+                        value=float(test_item.get('duration_hours', 0)),
+                        key=f"duration_{idx}"
+                    )
+                    test_item['standard_id'] = st.text_input(
+                        "매칭된 표준 ID",
+                        value=test_item.get('standard_id', ''),
+                        key=f"standard_{idx}",
+                        help="마스터 데이터와 매칭된 표준 ID"
+                    )
+                
+                test_item['notes'] = st.text_area(
+                    "비고",
+                    value=test_item.get('notes', ''),
+                    key=f"notes_{idx}"
+                )
     
-    col1, col2 = st.columns(2)
+    st.markdown("---")
+    
+    # 5.2.3 계획서 생성 버튼 & 5.2.4 의뢰 데이터 저장 버튼
+    col1, col2, col3 = st.columns([1, 1, 2])
     
     with col1:
-        sample_count = st.number_input("시료 수량", min_value=1, max_value=10, value=3)
-        start_date = st.date_input("시험 시작일", datetime.now()).strftime("%Y-%m-%d")
+        if st.button("📝 계획서 생성", use_container_width=True):
+            # 데이터 저장
+            st.session_state.db.save_request_data(
+                st.session_state.selected_request['request_id'],
+                st.session_state.extracted_data
+            )
+            st.session_state.current_page = 'plan_draft'
+            st.success("✅ 데이터 저장 완료!")
+            st.rerun()
     
     with col2:
-        st.markdown("#### 우선순위 조정")
-        st.info("시험 항목의 우선순위를 조정하면 시험 순서가 변경됩니다.")
-        
-        # 우선순위 자동 조정 옵션
-        auto_sequence = st.checkbox("자동 시퀀싱 사용", value=True)
-        
-        if auto_sequence:
-            st.session_state.test_items = sequence_test_items(st.session_state.test_items)
-            st.success("시험 항목이 우선순위에 따라 자동 정렬되었습니다.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("이전 단계로", key="back_to_step2"):
-            st.session_state.current_step = 2
-            st.experimental_rerun()
-    with col2:
-        if st.button("계획 생성하기", key="next_to_step4"):
-            st.session_state.current_step = 4
-            st.session_state.sample_count = sample_count
-            st.session_state.start_date = start_date
-            st.experimental_rerun()
+        if st.button("💾 의뢰 데이터 저장", use_container_width=True):
+            st.session_state.db.save_request_data(
+                st.session_state.selected_request['request_id'],
+                st.session_state.extracted_data
+            )
+            st.success("✅ 데이터 저장 완료!")
 
-elif st.session_state.current_step == 4:
-    # 단계 4: 결과 시각화
-    st.markdown('<h2 class="sub-header">4. 시험 계획 결과</h2>', unsafe_allow_html=True)
+
+def plan_draft_page():
+    """5.3 계획서 초안 작성 화면"""
+    st.markdown('<div class="main-header">📋 계획서 초안 작성</div>', unsafe_allow_html=True)
     
-    # 탭으로 다양한 시각화 제공
-    tab1, tab2, tab3 = st.tabs(["시험 순서 플로우차트", "일정 간트차트", "상세 계획표"])
+    # 5.3.1 세션 정보 표시
+    st.markdown('<div class="info-box">', unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        st.write(f"**👤 사용자:** {st.session_state.selected_user}")
+    with col2:
+        st.write(f"**📋 의뢰 ID:** {st.session_state.selected_request['request_id']}")
+    with col3:
+        if st.button("🔙 돌아가기"):
+            st.session_state.current_page = 'test_data'
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
     
-    with tab1:
-        st.markdown("#### 시험 항목 흐름도")
-        flowchart = create_flowchart(st.session_state.test_items)
-        st.graphviz_chart(flowchart)
+    # 5.3.2 계획서 출력 박스
+    st.markdown('<div class="sub-header">📊 계획서 초안</div>', unsafe_allow_html=True)
     
-    with tab2:
-        st.markdown("#### 예상 시험 일정")
-        gantt_data = create_gantt_chart(
-            st.session_state.test_items, 
-            st.session_state.start_date,
-            st.session_state.sample_count
-        )
-        
-        fig = ff.create_gantt(
-            gantt_data, 
-            colors=['#779ECB', '#83C25A', '#F1CE63', '#E87653', '#9F53E8'],
-            index_col='Resource',
-            show_colorbar=True,
-            group_tasks=True
-        )
-        fig.update_layout(autosize=True, height=500)
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with tab3:
-        st.markdown("#### 시험 계획 상세표")
-        
-        # 계획표 생성
+    # 계획서 데이터 준비
+    if st.session_state.plan_data is None:
         plan_data = []
-        start = datetime.strptime(st.session_state.start_date, "%Y-%m-%d")
-        
-        for i, item in enumerate(st.session_state.test_items):
-            duration = item["duration_hours"]
-            days = duration // 8
-            end = start + timedelta(days=days, hours=duration % 8)
-            
+        for idx, item in enumerate(st.session_state.extracted_data):
             plan_data.append({
-                "순서": i+1,
-                "시험 항목": item["name"],
-                "시험 조건": item["condition"],
-                "판정 기준": item["criteria"],
-                "시작일": start.strftime("%Y-%m-%d"),
-                "종료일": end.strftime("%Y-%m-%d"),
-                "소요 시간(시간)": duration,
-                "시료 수": st.session_state.sample_count
+                'include': True,
+                'order': idx + 1,
+                'test_name': item.get('test_name', ''),
+                'category': item.get('category', ''),
+                'temperature': item.get('temperature', ''),
+                'voltage': item.get('voltage', ''),
+                'cycles': item.get('cycles', 0),
+                'duration_hours': item.get('duration_hours', 0),
+                'notes': item.get('notes', '')
             })
-            
-            start = end
+        st.session_state.plan_data = plan_data
+    
+    # 편집 가능한 테이블
+    edited_data = []
+    for idx, item in enumerate(st.session_state.plan_data):
+        col_check, col_order, col_name, col_cat, col_temp, col_volt, col_cycles, col_hours = st.columns([0.5, 0.5, 2, 1.5, 1, 1, 1, 1])
         
-        plan_df = pd.DataFrame(plan_data)
-        st.dataframe(plan_df, use_container_width=True)
+        with col_check:
+            include = st.checkbox("", value=item['include'], key=f"include_{idx}", label_visibility="collapsed")
+        with col_order:
+            order = st.number_input("", value=item['order'], key=f"order_{idx}", label_visibility="collapsed", min_value=1)
+        with col_name:
+            test_name = st.text_input("", value=item['test_name'], key=f"plan_name_{idx}", label_visibility="collapsed")
+        with col_cat:
+            category = st.text_input("", value=item['category'], key=f"plan_cat_{idx}", label_visibility="collapsed")
+        with col_temp:
+            temperature = st.text_input("", value=item['temperature'], key=f"plan_temp_{idx}", label_visibility="collapsed")
+        with col_volt:
+            voltage = st.text_input("", value=item['voltage'], key=f"plan_volt_{idx}", label_visibility="collapsed")
+        with col_cycles:
+            cycles = st.number_input("", value=item['cycles'], key=f"plan_cycles_{idx}", label_visibility="collapsed")
+        with col_hours:
+            duration = st.number_input("", value=item['duration_hours'], key=f"plan_hours_{idx}", label_visibility="collapsed", format="%.1f")
+        
+        edited_data.append({
+            'include': include,
+            'order': order,
+            'test_name': test_name,
+            'category': category,
+            'temperature': temperature,
+            'voltage': voltage,
+            'cycles': cycles,
+            'duration_hours': duration,
+            'notes': item['notes']
+        })
     
-    # 다음 단계 버튼
-    col1, col2 = st.columns(2)
+    st.session_state.plan_data = edited_data
+    
+    # 헤더 표시
+    st.markdown("**계획서 테이블**")
+    col_check, col_order, col_name, col_cat, col_temp, col_volt, col_cycles, col_hours = st.columns([0.5, 0.5, 2, 1.5, 1, 1, 1, 1])
+    col_check.write("**포함**")
+    col_order.write("**순서**")
+    col_name.write("**시험명**")
+    col_cat.write("**분류**")
+    col_temp.write("**온도**")
+    col_volt.write("**전압**")
+    col_cycles.write("**사이클**")
+    col_hours.write("**시간(h)**")
+    
+    st.markdown("---")
+    
+    # 5.3.3 계획서 저장 버튼 & 5.3.4 일정 생성 버튼
+    col1, col2, col3 = st.columns([1, 1, 2])
+    
     with col1:
-        if st.button("계획 수정하기", key="back_to_step3"):
-            st.session_state.current_step = 3
-            st.experimental_rerun()
+        if st.button("💾 계획서 저장 (Excel)", use_container_width=True):
+            df = pd.DataFrame([item for item in st.session_state.plan_data if item['include']])
+            excel_file = export_to_excel(df, st.session_state.selected_request['request_id'])
+            st.download_button(
+                label="📥 Excel 다운로드",
+                data=excel_file,
+                file_name=f"plan_{st.session_state.selected_request['request_id']}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            st.success("✅ 계획서 저장 완료!")
+    
     with col2:
-        if st.button("계획 내보내기", key="next_to_step5"):
-            st.session_state.current_step = 5
-            st.session_state.plan_df = plan_df
-            st.experimental_rerun()
+        if st.button("📅 일정 생성", use_container_width=True):
+            st.session_state.current_page = 'schedule'
+            st.rerun()
 
-elif st.session_state.current_step == 5:
-    # 단계 5: 내보내기
-    st.markdown('<h2 class="sub-header">5. 계획 내보내기</h2>', unsafe_allow_html=True)
+
+def schedule_page():
+    """5.4 시험 일정 관리 화면"""
+    st.markdown('<div class="main-header">📅 시험 일정 관리</div>', unsafe_allow_html=True)
     
-    st.markdown("#### 시험 계획서가 생성되었습니다")
-    st.success("모든 단계가 완료되었습니다. 아래 옵션에서 원하는 형식으로 내보내세요.")
-    
-    col1, col2 = st.columns(2)
-    
+    # 5.4.1 세션 정보 표시
+    st.markdown('<div class="info-box">', unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        st.markdown("#### Excel 파일로 내보내기")
-        excel_data = to_excel(st.session_state.plan_df)
-        st.download_button(
-            label="Excel 다운로드",
-            data=excel_data,
-            file_name="블로워모터_시험계획서.xlsx",
-            mime="application/vnd.ms-excel"
-        )
+        st.write(f"**👤 사용자:** {st.session_state.selected_user}")
+    with col2:
+        st.write(f"**📋 의뢰 ID:** {st.session_state.selected_request['request_id']}")
+    with col3:
+        if st.button("🔙 돌아가기"):
+            st.session_state.current_page = 'plan_draft'
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # 5.4.2 타임라인(d-day) 확인 박스
+    st.markdown('<div class="sub-header">📊 Gantt Chart - 시험 타임라인</div>', unsafe_allow_html=True)
+    
+    # 시작일 선택
+    start_date = st.date_input(
+        "시험 시작일 선택",
+        value=datetime.now(),
+        help="Day 0의 날짜를 선택하세요"
+    )
+    
+    # Gantt Chart 데이터 생성
+    included_items = [item for item in st.session_state.plan_data if item['include']]
+    included_items.sort(key=lambda x: x['order'])
+    
+    gantt_data = []
+    current_start = start_date
+    
+    for item in included_items:
+        duration_days = item['duration_hours'] / 24
+        end_date = current_start + timedelta(days=duration_days)
+        
+        gantt_data.append({
+            'Task': item['test_name'],
+            'Start': current_start,
+            'Finish': end_date,
+            'Category': item['category'],
+            'Duration (hours)': item['duration_hours']
+        })
+        
+        current_start = end_date
+    
+    if gantt_data:
+        # Plotly Gantt Chart
+        fig = create_gantt_chart(gantt_data, title=f"의뢰 {st.session_state.selected_request['request_id']} - 시험 타임라인")
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # 요약 정보
+        total_duration = sum([item['duration_hours'] for item in included_items])
+        st.markdown(f"""
+        <div class="info-box">
+        <strong>📊 일정 요약</strong><br>
+        • 총 시험 항목: {len(included_items)}개<br>
+        • 총 소요 시간: {total_duration:.1f} 시간 ({total_duration/24:.1f} 일)<br>
+        • 시작일: {start_date.strftime('%Y-%m-%d')}<br>
+        • 종료 예정일: {current_start.strftime('%Y-%m-%d')}
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # 5.4.3 타임라인(d-day) 저장 버튼
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col1:
+        if st.button("💾 일정 저장", use_container_width=True):
+            # DB에 일정 저장
+            st.session_state.db.save_schedule(
+                st.session_state.selected_user,
+                st.session_state.selected_request['request_id'],
+                gantt_data
+            )
+            st.success("✅ 일정 저장 완료!")
+            st.balloons()
     
     with col2:
-        st.markdown("#### 보고서 형식으로 내보내기")
-        if st.button("PDF 보고서 생성"):
-            st.info("PDF 보고서가 생성 중입니다...")
-            # 실제 구현에서는 PDF 생성 로직 추가
-            st.success("PDF 보고서가 생성되었습니다!")
-            st.markdown("[보고서 다운로드](#)")  # 실제 구현 시 링크 추가
-    
-    # 프로젝트 저장
-    st.markdown("#### 프로젝트 저장")
-    project_name = st.text_input("프로젝트 이름", "블로워 모터 시험 계획")
-    
-    if st.button("프로젝트 저장하기"):
-        # 현재 프로젝트를 이력에 추가
-        new_project = {
-            "id": len(st.session_state.history) + 1,
-            "name": project_name,
-            "date": datetime.now().strftime("%Y-%m-%d")
-        }
-        st.session_state.history.append(new_project)
-        st.success(f"프로젝트 '{project_name}'이(가) 저장되었습니다!")
-    
-    if st.button("새 프로젝트 시작하기"):
-        # 세션 상태 초기화
-        st.session_state.current_step = 1
-        st.session_state.extracted_data = None
-        st.session_state.test_items = None
-        st.session_state.current_project = None
-        st.experimental_rerun()
+        if st.button("🏠 홈으로 돌아가기", use_container_width=True):
+            st.session_state.current_page = 'user_selection'
+            st.session_state.plan_data = None
+            st.rerun()
 
-# 푸터
-st.markdown("---")
-st.markdown("© 2026 Auto-Test Planner | 효성전기 연구지원팀")
+
+# 메인 라우팅
+def main():
+    if st.session_state.current_page == 'user_selection':
+        user_selection_page()
+    elif st.session_state.current_page == 'test_data':
+        test_data_page()
+    elif st.session_state.current_page == 'plan_draft':
+        plan_draft_page()
+    elif st.session_state.current_page == 'schedule':
+        schedule_page()
+
+
+if __name__ == "__main__":
+    main()
