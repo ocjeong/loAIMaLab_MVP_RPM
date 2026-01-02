@@ -1,0 +1,30 @@
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "std_name": "Undervoltage and Overvoltage Test",
+    "std_category": "Electrical Tests",
+    "ref_standard": "ISO 16750-3",
+    "aliases": ["과저전압", "정지 전압 확인", "전압 시험"]
+  },
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440001",
+    "std_name": "On & Off Test",
+    "std_category": "Endurance Test",
+    "ref_standard": "",
+    "aliases": ["작동성 시험", "온오프", "반복 작동"]
+  },
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440002",
+    "std_name": "High Temperature Test",
+    "std_category": "Operational and Environmental Tests",
+    "ref_standard": "ISO 16750-4",
+    "aliases": ["고온 시험", "내열 시험", "열 시험"]
+  },
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440003",
+    "std_name": "Low Temperature Test",
+    "std_category": "Operational and Environmental Tests",
+    "ref_standard": "ISO 16750-4",
+    "aliases": ["저온 시험", "내한 시험", "냉각 시험"]
+  }
+]
