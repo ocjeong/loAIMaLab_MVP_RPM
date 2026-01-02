@@ -23,13 +23,19 @@ streamlit run app.py
 
 ## 📁 프로젝트 구조
 ```
-rpm-app/
-├── app.py
-├── requirements.txt
-├── database.py
-├── llm_processor.py
-├── utils.py
-└── README.md
+rpm_app/
+├── app.py                 # 메인 앱
+├── requirements.txt       # 패키지 의존성
+├── .streamlit/
+│   └── config.toml       # Streamlit 설정
+├── modules/
+│   ├── __init__.py
+│   ├── document_parser.py    # 문서 파싱 모듈
+│   ├── database.py           # 데이터베이스 관리
+│   ├── scheduler.py          # 일정 관리
+│   └── utils.py              # 유틸리티 함수
+└── data/
+    └── master_data.json      # 마스터 데이터 초기값
 ```
 ## 🌐 배포
 Streamlit Community Cloud에 배포 가능합니다.
@@ -70,6 +76,6 @@ MIT License
 ✅ **Gantt Chart 시각화**\
 ✅ **Excel 내보내기 기능**\
 ✅ **사용자별 데이터 관리**\
-✅ **반응형 UI 디자인**\
+✅ **반응형 UI 디자인**
 
 이 코드는 바로 Streamlit Community Cloud에 배포 가능하며, 실제 LLM API를 연동하려면 `llm_processor.py`의 주석 처리된 부분을 활성화하고 API 키를 환경변수로 설정하면 됩니다!
