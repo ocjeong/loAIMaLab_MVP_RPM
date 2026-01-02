@@ -43,7 +43,7 @@ with st.sidebar:
     page = st.radio(
         "메뉴",
         ["사용자 선택", "시험 의뢰 항목 데이터", "계획서 초안 작성", "시험 일정 관리"],
-        key="navigation"
+        # key="navigation"
     )
     
     st.markdown("---")
@@ -166,7 +166,8 @@ if page == "사용자 선택":
             with col2:
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("✏️ 의뢰 수정", disabled=not st.session_state.get('current_request')):
-                    st.session_state.navigation = "시험 의뢰 항목 데이터"
+                    # st.session_state.navigation = "시험 의뢰 항목 데이터"
+                    st.session_state.page_to_show = "시험 의뢰 항목 데이터"  
                     st.session_state.edit_mode = True
                     st.rerun()
             
@@ -196,7 +197,8 @@ if page == "사용자 선택":
                             st.session_state.current_request = db.get_request_by_id(request_id)
                             st.session_state.extracted_data = extracted_data
                             st.session_state.edit_mode = False
-                            st.session_state.navigation = "시험 의뢰 항목 데이터"
+                            # st.session_state.navigation = "시험 의뢰 항목 데이터"
+                            st.session_state.page_to_show = "시험 의뢰 항목 데이터"  
                             
                             st.success("문서 분석이 완료되었습니다!")
                             st.rerun()
@@ -210,7 +212,8 @@ elif page == "시험 의뢰 항목 데이터":
     if not st.session_state.get('current_user') or not st.session_state.get('current_request'):
         st.warning("먼저 사용자와 의뢰를 선택해주세요.")
         if st.button("사용자 선택으로 이동"):
-            st.session_state.navigation = "사용자 선택"
+            # st.session_state.navigation = "사용자 선택"
+            st.session_state.page_to_show = "사용자 선택"  
             st.rerun()
     else:
         # 5.2.1. 세션 정보 표시
@@ -358,7 +361,8 @@ elif page == "시험 의뢰 항목 데이터":
                 # 마스터 데이터 업데이트 (Learning Loop)
                 db.update_master_from_request(data)
                 
-                st.session_state.navigation = "계획서 초안 작성"
+                # st.session_state.navigation = "계획서 초안 작성"
+                st.session_state.page_to_show = "계획서 초안 작성"  # 별도 변수 사용
                 st.rerun()
         
         with col2:
@@ -490,7 +494,9 @@ elif page == "계획서 초안 작성":
         
         with col2:
             if st.button("📅 일정 생성", type="primary"):
-                st.session_state.navigation = "시험 일정 관리"
+                # st.session_state.navigation = "시험 일정 관리"
+                st.session_state.page_to_show = "시험 일정 관리"
+                
                 st.rerun()
 
 # ============================================
@@ -500,7 +506,8 @@ elif page == "시험 일정 관리":
     if not st.session_state.get('current_user') or not st.session_state.get('current_request'):
         st.warning("먼저 사용자와 의뢰를 선택해주세요.")
         if st.button("사용자 선택으로 이동"):
-            st.session_state.navigation = "사용자 선택"
+            # st.session_state.navigation = "사용자 선택"
+            st.session_state.page_to_show = "사용자 선택"  
             st.rerun()
     else:
         # 5.4.1. 세션 정보 표시
@@ -579,7 +586,8 @@ elif page == "시험 일정 관리":
                 
                 with col2:
                     if st.button("🏠 처음으로"):
-                        st.session_state.navigation = "사용자 선택"
+                        # st.session_state.navigation = "사용자 선택"
+                        st.session_state.page_to_show = "사용자 선택"
                         st.session_state.current_request = None
                         st.session_state.extracted_data = None
                         st.session_state.plan_dataframe = None
@@ -589,7 +597,8 @@ elif page == "시험 일정 관리":
         else:
             st.warning("계획서를 먼저 작성해주세요.")
             if st.button("계획서 작성으로 이동"):
-                st.session_state.navigation = "계획서 초안 작성"
+                # st.session_state.navigation = "계획서 초안 작성"
+                st.session_state.page_to_show = "계획서 초안 작성"
                 st.rerun()
 
 # Footer
@@ -602,3 +611,4 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
