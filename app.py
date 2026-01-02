@@ -1,10 +1,11 @@
 import streamlit as st
-import json
+import pandas as pd
 from datetime import datetime
+import json
 from modules.document_parser import DocumentParser
-from modules.database import Database
-from modules.scheduler import Scheduler
-from modules.utils import initialize_session_state, display_session_info
+from modules.data_manager import DataManager
+from modules.scheduler import SchedulerManager
+from modules.utils import initialize_session_state, show_success_popup
 
 # 페이지 설정
 st.set_page_config(
@@ -17,236 +18,220 @@ st.set_page_config(
 # 세션 상태 초기화
 initialize_session_state()
 
-# 데이터베이스 초기화
+# 데이터 매니저 초기화
 @st.cache_resource
-def get_database():
-    return Database()
+def get_data_manager():
+    return DataManager()
 
-db = get_database()
-
-# 문서 파서 초기화
-@st.cache_resource
-def get_parser():
-    return DocumentParser()
-
-parser = get_parser()
-
-# 스케줄러 초기화
-scheduler = Scheduler(db)
+data_manager = get_data_manager()
 
 # 사이드바 - 네비게이션
-with st.sidebar:
-    st.title("🔧 RPM")
-    st.markdown("**Reliable Planning Manager**")
-    st.markdown("---")
-    
-    page = st.radio(
-        "메뉴",
-        ["사용자 선택", "시험 의뢰 항목 데이터", "계획서 초안 작성", "시험 일정 관리"],
-        # key="navigation"
-    )
-    
-    st.markdown("---")
-    st.markdown("### 시스템 정보")
-    st.info("Blower Motor Test Support System")
+st.sidebar.title("🔧 RPM")
+st.sidebar.markdown("**Reliable Planning Manager**")
+st.sidebar.markdown("---")
 
-# ============================================
-# 페이지 1: 사용자 선택 화면
-# ============================================
-if page == "사용자 선택":
-    st.title("👤 사용자 선택")
+# 페이지 선택
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "user_selection"
+
+# 메인 타이틀
+st.title("RPM - Reliable Planning Manager")
+st.markdown("### Blower Motor Test Support System")
+st.markdown("---")
+
+# ============================================================================
+# 5.1. 사용자 선택 화면
+# ============================================================================
+def user_selection_page():
+    st.header("👤 사용자 선택")
     
-    # 5.1.1. 사용자 선택 메뉴
-    users = db.get_all_users()
-    if not users:
-        st.warning("등록된 사용자가 없습니다. 새 사용자를 추가하세요.")
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.subheader("사용자 관리")
+        
+        # 5.1.1. 사용자 선택 메뉴
+        users = data_manager.get_user_list()
+        user_names = [user['user_id'] for user in users]
+        
+        if not user_names:
+            st.warning("등록된 사용자가 없습니다. 새 사용자를 추가해주세요.")
+            user_names = ["기본사용자"]
+        
+        selected_user = st.selectbox(
+            "사용자 선택",
+            user_names,
+            key="user_selector"
+        )
+        
+        # 사용자 추가
+        st.markdown("---")
         with st.expander("➕ 새 사용자 추가"):
-            new_user_name = st.text_input("사용자 이름")
-            new_user_email = st.text_input("이메일")
-            if st.button("사용자 추가"):
-                if new_user_name and new_user_email:
-                    db.add_user(new_user_name, new_user_email)
-                    st.success(f"사용자 '{new_user_name}'이(가) 추가되었습니다.")
-                    st.rerun()
+            new_user_name = st.text_input("사용자 이름", key="new_user_input")
+            if st.button("사용자 추가", key="add_user_btn"):
+                if new_user_name and new_user_name.strip():
+                    success = data_manager.add_user(new_user_name.strip())
+                    if success:
+                        st.success(f"✅ '{new_user_name}' 사용자가 추가되었습니다.")
+                        st.rerun()
+                    else:
+                        st.error("❌ 사용자 추가에 실패했습니다.")
                 else:
-                    st.error("모든 필드를 입력해주세요.")
-    else:
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            selected_user = st.selectbox(
-                "사용자 선택",
-                options=users,
-                format_func=lambda x: f"{x['name']} ({x['email']})",
-                key="selected_user_dropdown"
-            )
+                    st.warning("⚠️ 사용자 이름을 입력해주세요.")
         
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("➕ 사용자 추가"):
-                st.session_state.show_add_user = True
-        
+        # 사용자 선택 시 마지막 접속 시간 업데이트
         if selected_user:
+            data_manager.update_last_access(selected_user)
             st.session_state.current_user = selected_user
             
-            # 사용자 추가 폼
-            if st.session_state.get('show_add_user', False):
-                with st.expander("➕ 새 사용자 추가", expanded=True):
-                    new_user_name = st.text_input("사용자 이름")
-                    new_user_email = st.text_input("이메일")
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        if st.button("추가"):
-                            if new_user_name and new_user_email:
-                                db.add_user(new_user_name, new_user_email)
-                                st.success(f"사용자 '{new_user_name}'이(가) 추가되었습니다.")
-                                st.session_state.show_add_user = False
-                                st.rerun()
-                            else:
-                                st.error("모든 필드를 입력해주세요.")
-                    with col_b:
-                        if st.button("취소"):
-                            st.session_state.show_add_user = False
-                            st.rerun()
-            
-            st.markdown("---")
-            
-            # 5.1.2. 일정 확인 박스
-            st.subheader("📅 시험 일정")
-            
-            # 월 선택
-            selected_month = st.date_input(
-                "조회 월 선택",
-                value=datetime.now(),
-                key="schedule_month"
-            )
-            
-            # 해당 월의 전체 시험 일정 표시
-            schedule_data = db.get_user_schedule(
-                selected_user['id'], 
-                selected_month.year, 
-                selected_month.month
-            )
-            
-            if schedule_data:
-                st.plotly_chart(
-                    scheduler.create_monthly_gantt(schedule_data),
-                    use_container_width=True
-                )
-            else:
-                st.info("이번 달에 예정된 시험이 없습니다.")
-            
-            st.markdown("---")
-            
-            # 5.1.3. 의뢰 선택 메뉴
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                requests = db.get_user_requests(selected_user['id'])
-                if requests:
-                    selected_request = st.selectbox(
-                        "기존 의뢰 선택",
-                        options=[None] + requests,
-                        format_func=lambda x: "선택하세요..." if x is None else f"{x['client']} - {x['project']}",
-                        key="selected_request_dropdown"
-                    )
+            user_info = data_manager.get_user_info(selected_user)
+            if user_info:
+                st.info(f"📅 마지막 접속: {user_info.get('last_access', 'N/A')}")
+        
+        st.markdown("---")
+        
+        # 5.1.3. 의뢰 선택 메뉴
+        st.subheader("의뢰 관리")
+        
+        requests = data_manager.get_user_requests(selected_user)
+        request_options = ["선택하세요"] + [
+            f"{req['id']} - {req.get('client', 'N/A')} ({req.get('project', 'N/A')})"
+            for req in requests
+        ]
+        
+        selected_request = st.selectbox(
+            "의뢰 선택",
+            request_options,
+            key="request_selector"
+        )
+        
+        # 5.1.5. 의뢰 수정 버튼
+        if selected_request != "선택하세요":
+            request_id = selected_request.split(" - ")[0]
+            if st.button("📝 의뢰 수정", key="edit_request_btn", use_container_width=True):
+                st.session_state.current_request_id = request_id
+                st.session_state.current_page = "test_items"
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # 5.1.4. 새 의뢰 버튼
+        st.subheader("새 의뢰 생성")
+        uploaded_file = st.file_uploader(
+            "테스트 스펙 파일 업로드",
+            type=['pdf', 'docx'],
+            key="file_uploader"
+        )
+        
+        if uploaded_file is not None:
+            if st.button("🆕 새 의뢰 생성", key="new_request_btn", use_container_width=True):
+                with st.spinner("문서를 파싱하고 있습니다..."):
+                    parser = DocumentParser()
+                    extracted_data = parser.parse_document(uploaded_file)
                     
-                    if selected_request:
-                        st.session_state.current_request = selected_request
-                        
-                        # 선택된 의뢰의 일정 표시
-                        request_schedule = db.get_request_schedule(selected_request['id'])
-                        if request_schedule:
-                            st.plotly_chart(
-                                scheduler.create_request_gantt(request_schedule),
-                                use_container_width=True
-                            )
-                else:
-                    st.info("등록된 의뢰가 없습니다.")
-            
-            # 5.1.5. 의뢰 수정 버튼
-            with col2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("✏️ 의뢰 수정", disabled=not st.session_state.get('current_request')):
-                    # st.session_state.navigation = "시험 의뢰 항목 데이터"
-                    st.session_state.page_to_show = "시험 의뢰 항목 데이터"  
-                    st.session_state.edit_mode = True
-                    st.rerun()
-            
-            st.markdown("---")
-            
-            # 5.1.4. 새 의뢰 버튼
-            st.subheader("📄 새 의뢰 생성")
-            uploaded_file = st.file_uploader(
-                "테스트 스펙 파일 업로드",
-                type=['pdf', 'docx'],
-                help="PDF 또는 DOCX 형식의 테스트 스펙 문서를 업로드하세요."
+                    if extracted_data:
+                        st.session_state.extracted_data = extracted_data
+                        st.session_state.current_request_id = None
+                        st.session_state.current_page = "test_items"
+                        st.success("✅ 문서 파싱 완료!")
+                        st.rerun()
+                    else:
+                        st.error("❌ 문서 파싱에 실패했습니다.")
+    
+    with col2:
+        # 5.1.2. 일정 확인 박스
+        st.subheader("📅 시험 일정")
+        
+        if selected_user:
+            # 월 선택
+            current_date = datetime.now()
+            selected_month = st.date_input(
+                "월 선택",
+                value=current_date,
+                key="month_selector"
             )
             
-            if uploaded_file:
-                if st.button("🚀 새 의뢰 생성", type="primary"):
-                    with st.spinner("문서를 분석하고 있습니다..."):
-                        try:
-                            # 문서 파싱 및 데이터 추출
-                            extracted_data = parser.parse_document(uploaded_file, db.get_master_data())
-                            
-                            # 새 의뢰 생성
-                            request_id = db.create_request(
-                                user_id=selected_user['id'],
-                                extracted_data=extracted_data
-                            )
-                            
-                            st.session_state.current_request = db.get_request_by_id(request_id)
-                            st.session_state.extracted_data = extracted_data
-                            st.session_state.edit_mode = False
-                            # st.session_state.navigation = "시험 의뢰 항목 데이터"
-                            st.session_state.page_to_show = "시험 의뢰 항목 데이터"  
-                            
-                            st.success("문서 분석이 완료되었습니다!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"문서 처리 중 오류가 발생했습니다: {str(e)}")
-
-# ============================================
-# 페이지 2: 시험 의뢰 항목 데이터 화면
-# ============================================
-elif page == "시험 의뢰 항목 데이터":
-    if not st.session_state.get('current_user') or not st.session_state.get('current_request'):
-        st.warning("먼저 사용자와 의뢰를 선택해주세요.")
-        if st.button("사용자 선택으로 이동"):
-            # st.session_state.navigation = "사용자 선택"
-            st.session_state.page_to_show = "사용자 선택"  
-            st.rerun()
-    else:
-        # 5.2.1. 세션 정보 표시
-        display_session_info(st.session_state.current_user, st.session_state.current_request)
-        
-        st.title("📋 시험 의뢰 항목 데이터")
-        
-        # 5.2.2. 의뢰 추출 데이터 박스
-        st.subheader("추출된 데이터")
-        
-        # 데이터 로드
-        if st.session_state.get('extracted_data'):
-            data = st.session_state.extracted_data
-        else:
-            request = st.session_state.current_request
-            data = json.loads(request.get('final_data', request.get('extracted_data', '{}')))
-        
-        # 의뢰 정보
-        with st.expander("📌 의뢰 정보", expanded=True):
-            col1, col2 = st.columns(2)
-            with col1:
-                client = st.text_input("발주처", value=data.get('request_info', {}).get('client', ''))
-            with col2:
-                project = st.text_input("프로젝트명", value=data.get('request_info', {}).get('project', ''))
+            # 선택된 의뢰의 일정 또는 전체 일정 표시
+            if selected_request != "선택하세요":
+                request_id = selected_request.split(" - ")[0]
+                schedule_data = data_manager.get_request_schedule(request_id)
+                st.markdown(f"**의뢰 ID: {request_id}의 일정**")
+            else:
+                schedule_data = data_manager.get_user_schedule(
+                    selected_user, 
+                    selected_month.year, 
+                    selected_month.month
+                )
+                st.markdown(f"**{selected_user}의 전체 일정**")
             
-            data['request_info'] = {'client': client, 'project': project}
+            if schedule_data and len(schedule_data) > 0:
+                # 일정 데이터프레임 표시
+                df_schedule = pd.DataFrame(schedule_data)
+                st.dataframe(df_schedule, use_container_width=True, height=400)
+            else:
+                st.info("📭 표시할 일정이 없습니다.")
+        else:
+            st.info("👈 사용자를 선택해주세요.")
+
+
+# ============================================================================
+# 5.2. 시험 의뢰 항목 데이터 화면
+# ============================================================================
+def test_items_page():
+    st.header("📋 시험 의뢰 항목 데이터")
+    
+    # 뒤로가기 버튼
+    if st.button("← 사용자 선택으로 돌아가기", key="back_to_user"):
+        st.session_state.current_page = "user_selection"
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # 데이터 로드
+    if st.session_state.current_request_id:
+        # 기존 의뢰 수정
+        request_data = data_manager.get_request_data(st.session_state.current_request_id)
+        if request_data:
+            st.info(f"📝 의뢰 ID: {st.session_state.current_request_id} 수정 중")
+            test_items = request_data.get('extracted_data', [])
+            request_info = {
+                'client': request_data.get('client', ''),
+                'project': request_data.get('project', '')
+            }
+        else:
+            st.error("의뢰 데이터를 불러올 수 없습니다.")
+            return
+    else:
+        # 새 의뢰
+        if 'extracted_data' in st.session_state:
+            extracted = st.session_state.extracted_data
+            test_items = extracted.get('test_items', [])
+            request_info = extracted.get('request_info', {})
+            st.success("🆕 새 의뢰 생성 중")
+        else:
+            st.warning("추출된 데이터가 없습니다.")
+            return
+    
+    # 의뢰 정보 표시
+    col1, col2 = st.columns(2)
+    with col1:
+        client = st.text_input("발주처", value=request_info.get('client', ''), key="client_input")
+    with col2:
+        project = st.text_input("프로젝트명", value=request_info.get('project', ''), key="project_input")
+    
+    st.markdown("---")
+    
+    # 5.2.1. 의뢰 추출 데이터 박스
+    st.subheader("🔍 추출된 시험 항목")
+    
+    if test_items:
+        # 세션 상태에 편집 가능한 데이터 저장
+        if 'editable_test_items' not in st.session_state:
+            st.session_state.editable_test_items = test_items.copy()
         
-        # 시험 항목 데이터 (Expandable Tree View)
-        st.markdown("### 시험 항목")
-        test_items = data.get('test_items', [])
-        
-        for idx, item in enumerate(test_items):
-            with st.expander(f"🔬 {item.get('test_name', f'시험 항목 {idx+1}')}"):
+        # Expandable tree view로 각 시험 항목 표시
+        for idx, item in enumerate(st.session_state.editable_test_items):
+            with st.expander(f"**{idx+1}. {item.get('test_name', 'N/A')}**"):
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -270,345 +255,317 @@ elif page == "시험 의뢰 항목 데이터":
                         value=item.get('sample_assembly', ''),
                         key=f"sample_assembly_{idx}"
                     )
+                    item['test_sample_no'] = st.text_input(
+                        "샘플 번호", 
+                        value=item.get('test_sample_no', ''),
+                        key=f"test_sample_no_{idx}"
+                    )
                 
                 with col2:
-                    item['test_sample_no'] = st.number_input(
-                        "샘플 번호", 
-                        value=item.get('test_sample_no', 0),
-                        key=f"sample_no_{idx}"
-                    )
-                    item['sample_count'] = st.number_input(
+                    item['sample_count'] = st.text_input(
                         "시료 수", 
-                        value=item.get('sample_count', 1),
-                        min_value=1,
+                        value=item.get('sample_count', ''),
                         key=f"sample_count_{idx}"
                     )
-                    item['test_duration'] = st.number_input(
+                    item['test_duration'] = st.text_input(
                         "소요 일수", 
-                        value=float(item.get('test_duration', 1.0)),
-                        min_value=0.1,
-                        key=f"duration_{idx}"
+                        value=item.get('test_duration', ''),
+                        key=f"test_duration_{idx}"
                     )
-                    item['test_instrument'] = st.text_input(
-                        "시험 기기", 
-                        value=item.get('test_instrument', ''),
-                        key=f"instrument_{idx}"
+                    item['test_equipment'] = st.text_input(
+                        "시험 장비", 
+                        value=item.get('test_equipment', ''),
+                        key=f"test_equipment_{idx}"
+                    )
+                    item['test_master_id'] = st.text_input(
+                        "마스터 ID", 
+                        value=item.get('test_master_id', ''),
+                        key=f"test_master_id_{idx}"
                     )
                 
-                # 마스터 데이터 매칭
-                master_id = item.get('test_master_id', '')
-                master_data = db.get_master_by_id(master_id) if master_id else None
-                
-                if master_data:
-                    st.success(f"✅ 매칭됨: {master_data['std_name']} ({master_data['std_category']})")
-                else:
-                    st.warning("⚠️ 마스터 데이터 미매칭")
-                
-                # Custom Specs
-                st.markdown("**특수 요구사항**")
+                # Custom specs (JSON)
+                st.markdown("**특수 요구사항 (Custom Specs)**")
                 custom_specs = item.get('custom_specs', {})
-                
                 custom_specs_str = st.text_area(
-                    "Custom Specs (JSON)",
-                    value=json.dumps(custom_specs, indent=2, ensure_ascii=False),
+                    "JSON 형식으로 입력",
+                    value=json.dumps(custom_specs, ensure_ascii=False, indent=2),
                     height=150,
                     key=f"custom_specs_{idx}"
                 )
-                
                 try:
                     item['custom_specs'] = json.loads(custom_specs_str)
                 except:
-                    st.error("올바른 JSON 형식이 아닙니다.")
-                
-                # 삭제 버튼
-                if st.button(f"🗑️ 이 항목 삭제", key=f"delete_{idx}"):
-                    test_items.pop(idx)
-                    st.rerun()
-        
-        # 새 항목 추가
-        if st.button("➕ 새 시험 항목 추가"):
-            test_items.append({
-                "test_name": "",
-                "category": "",
-                "ref_standard": "",
-                "sample_assembly": "",
-                "test_sample_no": 0,
-                "sample_count": 1,
-                "test_duration": 1.0,
-                "test_instrument": "",
-                "test_master_id": "",
-                "custom_specs": {}
-            })
-            st.rerun()
-        
-        data['test_items'] = test_items
-        st.session_state.extracted_data = data
-        
-        st.markdown("---")
-        
-        # 5.2.3. 계획서 생성 버튼 & 5.2.4. 의뢰 데이터 저장 버튼
-        col1, col2, col3 = st.columns([1, 1, 2])
-        
-        with col1:
-            if st.button("📊 계획서 생성", type="primary"):
-                # 데이터 저장
-                db.update_request_data(
-                    st.session_state.current_request['id'],
-                    data
-                )
-                st.success("✅ 데이터가 저장되었습니다.")
-                
-                # 마스터 데이터 업데이트 (Learning Loop)
-                db.update_master_from_request(data)
-                
-                # st.session_state.navigation = "계획서 초안 작성"
-                st.session_state.page_to_show = "계획서 초안 작성"  # 별도 변수 사용
-                st.rerun()
-        
-        with col2:
-            if st.button("💾 데이터 저장"):
-                db.update_request_data(
-                    st.session_state.current_request['id'],
-                    data
-                )
-                st.success("✅ 데이터가 저장되었습니다.")
-
-# ============================================
-# 페이지 3: 계획서 초안 작성 화면
-# ============================================
-elif page == "계획서 초안 작성":
-    if not st.session_state.get('current_user') or not st.session_state.get('current_request'):
-        st.warning("먼저 사용자와 의뢰를 선택해주세요.")
-        if st.button("사용자 선택으로 이동"):
-            st.session_state.navigation = "사용자 선택"
-            st.rerun()
+                    st.warning("⚠️ JSON 형식이 올바르지 않습니다.")
     else:
-        # 5.3.1. 세션 정보 표시
-        display_session_info(st.session_state.current_user, st.session_state.current_request)
+        st.info("추출된 시험 항목이 없습니다.")
+    
+    st.markdown("---")
+    
+    # 버튼 영역
+    col1, col2, col3 = st.columns([1, 1, 2])
+    
+    # 5.2.2. 계획서 생성 버튼
+    with col1:
+        if st.button("📄 계획서 생성", key="generate_plan_btn", use_container_width=True):
+            # 데이터 저장
+            request_id = save_request_data(client, project)
+            if request_id:
+                st.session_state.current_request_id = request_id
+                st.session_state.current_page = "plan_draft"
+                show_success_popup("데이터가 저장되었습니다.")
+                st.rerun()
+    
+    # 5.2.3. 의뢰 데이터 저장 버튼
+    with col2:
+        if st.button("💾 의뢰 데이터 저장", key="save_request_btn", use_container_width=True):
+            request_id = save_request_data(client, project)
+            if request_id:
+                show_success_popup("데이터가 저장되었습니다.")
+                st.session_state.current_request_id = request_id
+
+
+def save_request_data(client, project):
+    """의뢰 데이터 저장 함수"""
+    try:
+        request_data = {
+            'user_id': st.session_state.current_user,
+            'client': client,
+            'project': project,
+            'extracted_data': st.session_state.editable_test_items,
+            'final_data': st.session_state.editable_test_items,
+            'is_verified': False
+        }
         
-        st.title("📝 계획서 초안 작성")
-        
-        # 5.3.2. 계획서 출력 박스
-        request = st.session_state.current_request
-        data = json.loads(request.get('final_data', request.get('extracted_data', '{}')))
-        
-        test_items = data.get('test_items', [])
-        
-        if not test_items:
-            st.warning("시험 항목이 없습니다.")
-        else:
-            # 계획서 테이블 생성
-            st.subheader("계획서 초안")
-            
-            # 우선순위 정렬 (카테고리별)
-            sorted_items = scheduler.sort_by_priority(test_items)
-            
-            # 데이터프레임으로 표시
-            import pandas as pd
-            
-            plan_data = []
-            for idx, item in enumerate(sorted_items):
-                master = db.get_master_by_id(item.get('test_master_id', ''))
-                
-                plan_data.append({
-                    '포함': True,
-                    '순서': idx + 1,
-                    '시험명': item.get('test_name', ''),
-                    '표준명': master['std_name'] if master else '-',
-                    '분류': item.get('category', ''),
-                    '표준분류': master['std_category'] if master else '-',
-                    '참조규격': item.get('ref_standard', ''),
-                    '시료구성': item.get('sample_assembly', ''),
-                    '시료수': item.get('sample_count', 1),
-                    '소요일수': item.get('test_duration', 1.0),
-                    '시험기기': item.get('test_instrument', ''),
-                })
-            
-            df = pd.DataFrame(plan_data)
-            
-            # 편집 가능한 데이터 에디터
-            edited_df = st.data_editor(
-                df,
-                use_container_width=True,
-                num_rows="dynamic",
-                column_config={
-                    "포함": st.column_config.CheckboxColumn(
-                        "포함",
-                        help="계획서에 포함할지 선택",
-                        default=True,
-                    ),
-                    "순서": st.column_config.NumberColumn(
-                        "순서",
-                        help="시험 순서",
-                        min_value=1,
-                        step=1,
-                    ),
-                    "소요일수": st.column_config.NumberColumn(
-                        "소요일수",
-                        help="예상 소요 일수",
-                        min_value=0.1,
-                        format="%.1f",
-                    ),
-                },
-                hide_index=True,
+        if st.session_state.current_request_id:
+            # 기존 의뢰 업데이트
+            success = data_manager.update_request(
+                st.session_state.current_request_id,
+                request_data
             )
-            
-            st.session_state.plan_dataframe = edited_df
-            
-            # 통계 정보
-            st.markdown("---")
-            col1, col2, col3 = st.columns(3)
-            
-            included_items = edited_df[edited_df['포함'] == True]
-            
-            with col1:
-                st.metric("총 시험 항목", len(included_items))
-            with col2:
-                st.metric("총 예상 소요일", f"{included_items['소요일수'].sum():.1f}일")
-            with col3:
-                st.metric("총 시료 수", included_items['시료수'].sum())
+            return st.session_state.current_request_id if success else None
+        else:
+            # 새 의뢰 생성
+            request_id = data_manager.create_request(request_data)
+            return request_id
+    except Exception as e:
+        st.error(f"❌ 저장 중 오류 발생: {str(e)}")
+        return None
+
+
+# ============================================================================
+# 5.3. 계획서 초안 작성 화면
+# ============================================================================
+def plan_draft_page():
+    st.header("📝 계획서 초안 작성")
+    
+    # 뒤로가기 버튼
+    if st.button("← 시험 항목으로 돌아가기", key="back_to_items"):
+        st.session_state.current_page = "test_items"
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # 의뢰 데이터 로드
+    if not st.session_state.current_request_id:
+        st.warning("의뢰 ID가 없습니다.")
+        return
+    
+    request_data = data_manager.get_request_data(st.session_state.current_request_id)
+    if not request_data:
+        st.error("의뢰 데이터를 불러올 수 없습니다.")
+        return
+    
+    # 5.3.1. 계획서 출력 박스
+    st.subheader("📋 계획서 초안")
+    
+    test_items = request_data.get('final_data', [])
+    
+    if test_items:
+        # 계획서 데이터프레임 생성
+        plan_data = []
+        for idx, item in enumerate(test_items):
+            plan_row = {
+                '포함': True,
+                '번호': idx + 1,
+                '시험명': item.get('test_name', ''),
+                '분류': item.get('category', ''),
+                '참조규격': item.get('ref_standard', ''),
+                '시료구성': item.get('sample_assembly', ''),
+                '시료수': item.get('sample_count', ''),
+                '소요일수': item.get('test_duration', ''),
+                '시험장비': item.get('test_equipment', ''),
+                '특수요구사항': json.dumps(item.get('custom_specs', {}), ensure_ascii=False)
+            }
+            plan_data.append(plan_row)
         
-        st.markdown("---")
+        # 세션 상태에 저장
+        if 'plan_dataframe' not in st.session_state:
+            st.session_state.plan_dataframe = pd.DataFrame(plan_data)
         
-        # 5.3.3. 계획서 저장 버튼 & 5.3.4. 일정 생성 버튼
-        col1, col2, col3 = st.columns([1, 1, 2])
+        # 데이터 에디터로 편집 가능하게 표시
+        edited_df = st.data_editor(
+            st.session_state.plan_dataframe,
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config={
+                "포함": st.column_config.CheckboxColumn(
+                    "포함",
+                    help="계획서에 포함 여부",
+                    default=True,
+                )
+            },
+            hide_index=True,
+            key="plan_editor"
+        )
         
-        with col1:
-            if st.button("💾 Excel 저장", type="secondary"):
-                try:
-                    # Excel 파일 생성
-                    excel_file = scheduler.create_excel_plan(
-                        edited_df,
-                        st.session_state.current_request
-                    )
-                    
+        st.session_state.plan_dataframe = edited_df
+    else:
+        st.info("시험 항목이 없습니다.")
+    
+    st.markdown("---")
+    
+    # 버튼 영역
+    col1, col2, col3 = st.columns([1, 1, 2])
+    
+    # 5.3.2. 계획서 저장 버튼
+    with col1:
+        if st.button("💾 계획서 저장 (Excel)", key="save_plan_btn", use_container_width=True):
+            try:
+                # 포함된 항목만 필터링
+                filtered_df = edited_df[edited_df['포함'] == True].copy()
+                filtered_df = filtered_df.drop(columns=['포함'])
+                
+                # Excel 파일로 저장
+                filename = f"계획서_{st.session_state.current_request_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                filtered_df.to_excel(filename, index=False, engine='openpyxl')
+                
+                # 다운로드 버튼
+                with open(filename, 'rb') as f:
                     st.download_button(
                         label="📥 계획서 다운로드",
-                        data=excel_file,
-                        file_name=f"test_plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        data=f,
+                        file_name=filename,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-                    st.success("✅ 계획서가 생성되었습니다.")
-                except Exception as e:
-                    st.error(f"Excel 생성 중 오류: {str(e)}")
-        
-        with col2:
-            if st.button("📅 일정 생성", type="primary"):
-                # st.session_state.navigation = "시험 일정 관리"
-                st.session_state.page_to_show = "시험 일정 관리"
                 
-                st.rerun()
-
-# ============================================
-# 페이지 4: 시험 일정 관리 화면
-# ============================================
-elif page == "시험 일정 관리":
-    if not st.session_state.get('current_user') or not st.session_state.get('current_request'):
-        st.warning("먼저 사용자와 의뢰를 선택해주세요.")
-        if st.button("사용자 선택으로 이동"):
-            # st.session_state.navigation = "사용자 선택"
-            st.session_state.page_to_show = "사용자 선택"  
-            st.rerun()
-    else:
-        # 5.4.1. 세션 정보 표시
-        display_session_info(st.session_state.current_user, st.session_state.current_request)
-        
-        st.title("📅 시험 일정 관리")
-        
-        # 5.4.2. 타임라인(d-day) 확인 박스
-        st.subheader("Gantt Chart (D-Day 기준)")
-        
-        # 계획서 데이터 가져오기
-        if st.session_state.get('plan_dataframe') is not None:
-            df = st.session_state.plan_dataframe
-            included_items = df[df['포함'] == True].copy()
+                show_success_popup("계획서가 저장되었습니다.")
+            except Exception as e:
+                st.error(f"❌ 저장 중 오류 발생: {str(e)}")
+    
+    # 5.3.3. 일정 생성 버튼
+    with col2:
+        if st.button("📅 일정 생성", key="generate_schedule_btn", use_container_width=True):
+            # 포함된 항목만 전달
+            filtered_items = []
+            for idx, row in edited_df.iterrows():
+                if row['포함']:
+                    filtered_items.append(test_items[idx])
             
-            if len(included_items) > 0:
-                # 시작일 설정
-                col1, col2 = st.columns([1, 3])
-                with col1:
-                    start_date = st.date_input(
-                        "시험 시작일",
-                        value=datetime.now(),
-                        key="test_start_date"
-                    )
-                
-                # Gantt Chart 생성
-                gantt_fig = scheduler.create_dday_gantt(included_items, start_date)
-                st.plotly_chart(gantt_fig, use_container_width=True)
-                
-                # 일정 요약
-                st.markdown("---")
-                st.subheader("📊 일정 요약")
-                
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("시작일", start_date.strftime("%Y-%m-%d"))
-                with col2:
-                    total_days = included_items['소요일수'].sum()
-                    st.metric("총 소요일", f"{total_days:.1f}일")
-                with col3:
-                    from datetime import timedelta
-                    end_date = start_date + timedelta(days=total_days)
-                    st.metric("종료 예정일", end_date.strftime("%Y-%m-%d"))
-                with col4:
-                    st.metric("시험 항목 수", len(included_items))
-                
-                # 5.4.3. 타임라인(d-day) 저장 버튼
-                st.markdown("---")
-                
-                col1, col2, col3 = st.columns([1, 1, 2])
-                
-                with col1:
-                    if st.button("💾 일정 저장", type="primary"):
-                        try:
-                            # 일정 데이터 저장
-                            schedule_data = scheduler.prepare_schedule_data(
-                                included_items,
-                                start_date,
-                                st.session_state.current_request['id']
-                            )
-                            
-                            db.save_schedule(
-                                st.session_state.current_user['id'],
-                                st.session_state.current_request['id'],
-                                schedule_data
-                            )
-                            
-                            st.success("✅ 일정이 저장되었습니다!")
-                            
-                            # 검증 완료 표시
-                            db.mark_request_verified(st.session_state.current_request['id'])
-                            
-                        except Exception as e:
-                            st.error(f"일정 저장 중 오류: {str(e)}")
-                
-                with col2:
-                    if st.button("🏠 처음으로"):
-                        # st.session_state.navigation = "사용자 선택"
-                        st.session_state.page_to_show = "사용자 선택"
-                        st.session_state.current_request = None
-                        st.session_state.extracted_data = None
-                        st.session_state.plan_dataframe = None
-                        st.rerun()
-            else:
-                st.warning("포함된 시험 항목이 없습니다.")
-        else:
-            st.warning("계획서를 먼저 작성해주세요.")
-            if st.button("계획서 작성으로 이동"):
-                # st.session_state.navigation = "계획서 초안 작성"
-                st.session_state.page_to_show = "계획서 초안 작성"
-                st.rerun()
+            st.session_state.schedule_items = filtered_items
+            st.session_state.current_page = "schedule"
+            st.rerun()
 
-# Footer
-st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; color: gray;'>
-    <p>RPM - Reliable Planning Manager v1.0 | Blower Motor Test Support System</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
 
+# ============================================================================
+# 5.4. 시험 일정 관리 화면
+# ============================================================================
+def schedule_page():
+    st.header("📅 시험 일정 관리")
+    
+    # 뒤로가기 버튼
+    if st.button("← 계획서로 돌아가기", key="back_to_plan"):
+        st.session_state.current_page = "plan_draft"
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # 일정 데이터 로드
+    if 'schedule_items' not in st.session_state or not st.session_state.schedule_items:
+        st.warning("일정을 생성할 항목이 없습니다.")
+        return
+    
+    # 5.4.2. 타임라인(d-day) 확인 박스
+    st.subheader("📊 Gantt Chart")
+    
+    # 시작일 선택
+    start_date = st.date_input(
+        "시험 시작일 (Day 0)",
+        value=datetime.now(),
+        key="start_date_input"
+    )
+    
+    # 스케줄러 초기화
+    scheduler = SchedulerManager()
+    
+    # Gantt 차트 생성
+    gantt_fig = scheduler.create_gantt_chart(
+        st.session_state.schedule_items,
+        start_date
+    )
+    
+    if gantt_fig:
+        st.plotly_chart(gantt_fig, use_container_width=True)
+        
+        # 일정 요약 테이블
+        st.subheader("📋 일정 요약")
+        schedule_summary = scheduler.create_schedule_summary(
+            st.session_state.schedule_items,
+            start_date
+        )
+        st.dataframe(schedule_summary, use_container_width=True)
+    else:
+        st.error("Gantt 차트 생성에 실패했습니다.")
+    
+    st.markdown("---")
+    
+    # 5.4.3. 타임라인(d-day) 저장 버튼
+    col1, col2, col3 = st.columns([1, 1, 2])
+    
+    with col1:
+        if st.button("💾 일정 저장", key="save_schedule_btn", use_container_width=True):
+            try:
+                success = data_manager.save_schedule(
+                    st.session_state.current_user,
+                    st.session_state.current_request_id,
+                    st.session_state.schedule_items,
+                    start_date
+                )
+                
+                if success:
+                    show_success_popup("일정이 저장되었습니다.")
+                    st.success("✅ 일정이 데이터베이스에 저장되었습니다.")
+                else:
+                    st.error("❌ 일정 저장에 실패했습니다.")
+            except Exception as e:
+                st.error(f"❌ 저장 중 오류 발생: {str(e)}")
+
+
+# ============================================================================
+# 페이지 라우팅
+# ============================================================================
+def main():
+    # 현재 사용자 표시
+    if 'current_user' in st.session_state:
+        st.sidebar.success(f"👤 현재 사용자: **{st.session_state.current_user}**")
+    
+    st.sidebar.markdown("---")
+    
+    # 페이지 네비게이션
+    pages = {
+        "user_selection": ("👤 사용자 선택", user_selection_page),
+        "test_items": ("📋 시험 항목", test_items_page),
+        "plan_draft": ("📝 계획서 작성", plan_draft_page),
+        "schedule": ("📅 일정 관리", schedule_page)
+    }
+    
+    # 현재 페이지 표시
+    current_page_info = pages.get(st.session_state.current_page)
+    if current_page_info:
+        st.sidebar.info(f"현재 페이지: **{current_page_info[0]}**")
+        current_page_info[1]()
+    else:
+        user_selection_page()
+
+
+if __name__ == "__main__":
+    main()
