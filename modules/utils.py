@@ -20,6 +20,9 @@ def initialize_session_state():
     if 'show_add_user' not in st.session_state:
         st.session_state.show_add_user = False
 
+    if 'page_to_show' not in st.session_state:
+        st.session_state.page_to_show = None
+
 def display_session_info(user, request):
     """세션 정보 표시"""
     st.info(f"👤 **사용자:** {user['name']} | 📋 **의뢰:** {request.get('client', 'N/A')} - {request.get('project', 'N/A')}")
