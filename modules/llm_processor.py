@@ -1,6 +1,8 @@
 import base64
 import json
 import os
+# 실제 구현 시 사용
+import requests
 
 class LLMProcessor:
     def __init__(self, database):
@@ -79,8 +81,7 @@ class LLMProcessor:
         """
         Gemini API 호출 (실제 구현)
         """
-        실제 구현 시 사용
-        import requests
+        # 실제 구현 시 사용
         
         # 파일을 base64로 인코딩
         file_base64 = base64.b64encode(file_content).decode('utf-8')
