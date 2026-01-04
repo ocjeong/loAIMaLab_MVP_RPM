@@ -72,49 +72,49 @@ class LLMProcessor:
                 }
             ]
         }
-        
-        return sample_extracted_data
+        return self.call_gemini_api(file_content, mime_type)
+        # return sample_extracted_data
     
     def call_gemini_api(self, file_content, mime_type):
         """
         Gemini API 호출 (실제 구현)
         """
-        # 실제 구현 시 사용
-        # import requests
-        # 
-        # # 파일을 base64로 인코딩
-        # file_base64 = base64.b64encode(file_content).decode('utf-8')
-        # 
-        # # 마스터 데이터 가져오기
-        # master_tests = self.db.get_master_tests()
-        # master_json = master_tests.to_json(orient='records', force_ascii=False)
-        # 
-        # # 프롬프트 구성
-        # prompt = self.get_extraction_prompt(master_json)
-        # 
-        # # API 호출
-        # url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
-        # payload = {
-        #     "contents": [{
-        #         "role": "user",
-        #         "parts": [
-        #             {"text": prompt},
-        #             {"inline_data": {
-        #                 "mime_type": mime_type,
-        #                 "data": file_base64
-        #             }}
-        #         ]
-        #     }]
-        # }
-        # 
-        # response = requests.post(url, json=payload)
-        # result = response.json()
-        # 
-        # # JSON 추출
-        # extracted_json = self.extract_json_from_response(result)
-        # return extracted_json
+        실제 구현 시 사용
+        import requests
         
-        pass
+        # 파일을 base64로 인코딩
+        file_base64 = base64.b64encode(file_content).decode('utf-8')
+        
+        # 마스터 데이터 가져오기
+        master_tests = self.db.get_master_tests()
+        master_json = master_tests.to_json(orient='records', force_ascii=False)
+        
+        # 프롬프트 구성
+        prompt = self.get_extraction_prompt(master_json)
+        
+        # API 호출
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
+        payload = {
+            "contents": [{
+                "role": "user",
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {
+                        "mime_type": mime_type,
+                        "data": file_base64
+                    }}
+                ]
+            }]
+        }
+        
+        response = requests.post(url, json=payload)
+        result = response.json()
+        
+        # JSON 추출
+        extracted_json = self.extract_json_from_response(result)
+        return extracted_json
+        
+        # pass
     
     def get_extraction_prompt(self, master_json):
         """추출 프롬프트 생성"""
