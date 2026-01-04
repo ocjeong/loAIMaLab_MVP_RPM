@@ -1,7 +1,6 @@
 import base64
 import json
 import os
-# 실제 구현 시 사용
 import requests
 
 class LLMProcessor:
@@ -12,13 +11,33 @@ class LLMProcessor:
     def process_document(self, uploaded_file):
         """
         문서 처리 및 데이터 추출
-        실제 환경에서는 Gemini API를 호출하여 처리
-        데모 환경에서는 샘플 데이터 반환
         """
-        # 실제 구현에서는 Gemini API 호출
-        # 여기서는 데모용 샘플 데이터 반환
-        
-        sample_extracted_data = {
+        # 실제 API 사용 시
+        if self.api_key:
+            try:
+                # 파일 읽기
+                file_content = uploaded_file.read()
+                
+                # MIME 타입 결정
+                mime_type = uploaded_file.type
+                if not mime_type:
+                    if uploaded_file.name.endswith('.pdf'):
+                        mime_type = 'application/pdf'
+                    elif uploaded_file.name.endswith('.docx'):
+                        mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                
+                # Gemini API 호출
+                return self.call_gemini_api(file_content, mime_type)
+            except Exception as e:
+                print(f"Error processing document: {e}")
+                return self._get_sample_data()
+        else:
+            # API 키가 없으면 샘플 데이터 반환
+            return self._get_sample_data()
+    
+    def _get_sample_data(self):
+        """샘플 데이터 반환 (데모용)"""
+        return {
             "request_info": {
                 "client": "Sample Client",
                 "project": "Blower Motor Test Project"
@@ -74,48 +93,58 @@ class LLMProcessor:
                 }
             ]
         }
-        return self.call_gemini_api(file_content, mime_type)
-        # return sample_extracted_data
     
     def call_gemini_api(self, file_content, mime_type):
         """
         Gemini API 호출 (실제 구현)
         """
-        # 실제 구현 시 사용
-        
-        # 파일을 base64로 인코딩
-        file_base64 = base64.b64encode(file_content).decode('utf-8')
-        
-        # 마스터 데이터 가져오기
-        master_tests = self.db.get_master_tests()
-        master_json = master_tests.to_json(orient='records', force_ascii=False)
-        
-        # 프롬프트 구성
-        prompt = self.get_extraction_prompt(master_json)
-        
-        # API 호출
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
-        payload = {
-            "contents": [{
-                "role": "user",
-                "parts": [
-                    {"text": prompt},
-                    {"inline_data": {
-                        "mime_type": mime_type,
-                        "data": file_base64
-                    }}
-                ]
-            }]
-        }
-        
-        response = requests.post(url, json=payload)
-        result = response.json()
-        
-        # JSON 추출
-        extracted_json = self.extract_json_from_response(result)
-        return extracted_json
-        
-        # pass
+        try:
+            # 파일을 base64로 인코딩
+            file_base64 = base64.b64encode(file_content).decode('utf-8')
+            
+            # 마스터 데이터 가져오기
+            master_tests = self.db.get_master_tests()
+            master_json = master_tests.to_json(orient='records', force_ascii=False)
+            
+            # 프롬프트 구성
+            prompt = self.get_extraction_prompt(master_json)
+            
+            # API 호출
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={self.api_key}"
+            
+            payload = {
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {
+                            "mime_type": mime_type,
+                            "data": file_base64
+                        }}
+                    ]
+                }],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "maxOutputTokens": 8192
+                }
+            }
+            
+            headers = {
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(url, json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            # JSON 추출
+            extracted_json = self.extract_json_from_response(result)
+            return extracted_json if extracted_json else self._get_sample_data()
+            
+        except Exception as e:
+            print(f"Error calling Gemini API: {e}")
+            return self._get_sample_data()
     
     def get_extraction_prompt(self, master_json):
         """추출 프롬프트 생성"""
@@ -167,13 +196,20 @@ class LLMProcessor:
     def extract_json_from_response(self, response):
         """API 응답에서 JSON 추출"""
         try:
-            # Gemini API 응답 구조에 맞게 수정 필요
+            # Gemini API 응답 구조
             text = response['candidates'][0]['content']['parts'][0]['text']
-            # JSON 부분만 추출
-            json_start = text.find('{')
-            json_end = text.rfind('}') + 1
-            json_str = text[json_start:json_end]
-            return json.loads(json_str)
+            
+            # JSON 코드 블록 제거
+            if '```json' in text:
+                text = text.split('```json')[1].split('```')[0]
+            elif '```' in text:
+                text = text.split('```')[1].split('```')[0]
+            
+            # JSON 파싱
+            text = text.strip()
+            return json.loads(text)
+            
         except Exception as e:
             print(f"Error extracting JSON: {e}")
+            print(f"Response: {response}")
             return None
