@@ -10,7 +10,7 @@ class LLMHandler:
     def __init__(self, db_manager):
         self.db_manager = db_manager
         self.api_key = os.getenv('GEMINI_API_KEY', '')  # 환경 변수에서 API 키 로드
-        self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={self.api_key}"
+        self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
     
     def extract_test_data(self, uploaded_file):
         """업로드된 파일에서 시험 데이터 추출"""
