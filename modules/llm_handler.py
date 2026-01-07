@@ -47,6 +47,7 @@ class LLMHandler:
                     return self._parse_response(response)
             
             # API 키가 없거나 실패 시 더미 데이터 반환
+            print(f"API 키가 없거나 실패: 데이터 반환")
             return self._get_dummy_data()
             
         except Exception as e:
