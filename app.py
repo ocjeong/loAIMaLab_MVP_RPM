@@ -102,9 +102,36 @@ with st.sidebar:
         st.rerun()
 
 
-# ========== 페이지 1: 사용자 선택 화면 ==========
-# ========== 페이지 1: 사용자 선택 화면 ========== 부분을 아래와 같이 수정
 
+# ========== 헬퍼 함수 추가 (user_selection_page 함수 위에 추가) ==========
+
+def get_sample_pdf_files():
+    """sample 폴더에서 PDF 파일 목록을 가져오는 함수"""
+    sample_dir = 'sample'
+    
+    # sample 폴더가 없으면 생성
+    if not os.path.exists(sample_dir):
+        os.makedirs(sample_dir)
+        return []
+    
+    # PDF 파일만 필터링
+    pdf_files = []
+    try:
+        for file in os.listdir(sample_dir):
+            if file.lower().endswith('.pdf'):
+                full_path = os.path.join(sample_dir, file)
+                pdf_files.append(full_path)
+    except Exception as e:
+        print(f"Error reading sample directory: {e}")
+        return []
+    
+    # 파일명 기준으로 정렬
+    pdf_files.sort()
+    
+    return pdf_files
+
+# ========== 페이지 1: 사용자 선택 화면 ========== 부분을 아래와 같이 수정
+# ========== 페이지 1: 사용자 선택 화면 ==========
 def user_selection_page():
     st.title("🔧 RPM - Reliable Planning Manager")
     st.subheader("Blower Motor Test Support System")
@@ -167,9 +194,23 @@ def user_selection_page():
                     request_id = selected_request.split(" - ")[0]
                     st.session_state.current_request = request_id
                     
-                    # 기존 의뢰 데이터 불러오기
+                    # 기존 의뢰 데이터 불러오기 (수정됨)
                     request_data = db.get_request_by_id(request_id)
-                    st.session_state.extracted_data = json.loads(request_data['final_data'])
+                    final_data = json.loads(request_data['final_data'])
+                    
+                    # 데이터 구조 정규화
+                    if isinstance(final_data, list):
+                        # 리스트인 경우 딕셔너리로 변환
+                        st.session_state.extracted_data = {
+                            'request_info': {
+                                'client': request_data['client'],
+                                'project': request_data['project']
+                            },
+                            'test_items': final_data
+                        }
+                    else:
+                        # 이미 딕셔너리인 경우 그대로 사용
+                        st.session_state.extracted_data = final_data
                     
                     st.session_state.page = 'data_edit'
                     st.rerun()
@@ -178,7 +219,7 @@ def user_selection_page():
         
         st.markdown("---")
         
-        # 새 의뢰 버튼 (수정됨)
+        # 새 의뢰 버튼
         st.subheader("📄 새 의뢰 생성")
         
         # 탭으로 파일 업로드와 샘플 선택 구분
@@ -281,51 +322,44 @@ def user_selection_page():
             st.warning("사용자를 선택하면 일정을 확인할 수 있습니다.")
 
 
-# ========== 헬퍼 함수 추가 (user_selection_page 함수 위에 추가) ==========
-
-def get_sample_pdf_files():
-    """sample 폴더에서 PDF 파일 목록을 가져오는 함수"""
-    sample_dir = 'sample'
-    
-    # sample 폴더가 없으면 생성
-    if not os.path.exists(sample_dir):
-        os.makedirs(sample_dir)
-        return []
-    
-    # PDF 파일만 필터링
-    pdf_files = []
-    try:
-        for file in os.listdir(sample_dir):
-            if file.lower().endswith('.pdf'):
-                full_path = os.path.join(sample_dir, file)
-                pdf_files.append(full_path)
-    except Exception as e:
-        print(f"Error reading sample directory: {e}")
-        return []
-    
-    # 파일명 기준으로 정렬
-    pdf_files.sort()
-    
-    return pdf_files
-
-
+# ========== 페이지 2: 추출 시험 규격 편집 화면 ==========
 # ========== 페이지 2: 추출 시험 규격 편집 화면 ==========
 def data_edit_page():
     st.title("📝 시험 규격 데이터 편집")
     
     if not st.session_state.extracted_data:
         st.error("추출된 데이터가 없습니다.")
+        if st.button("🏠 홈으로 돌아가기"):
+            st.session_state.page = 'user_selection'
+            st.rerun()
         return
     
     data = st.session_state.extracted_data
+    
+    # 데이터 구조 검증 및 정규화 (추가됨)
+    if isinstance(data, list):
+        # 리스트만 있는 경우 (하위 호환성)
+        data = {
+            'request_info': {'client': '', 'project': ''},
+            'test_items': data
+        }
+        st.session_state.extracted_data = data
     
     # 의뢰 정보 표시
     st.subheader("📋 의뢰 정보")
     col1, col2 = st.columns(2)
     with col1:
-        client = st.text_input("발주처", value=data.get('request_info', {}).get('client', ''))
+        client = st.text_input(
+            "발주처", 
+            value=data.get('request_info', {}).get('client', ''),
+            key="edit_client"
+        )
     with col2:
-        project = st.text_input("프로젝트", value=data.get('request_info', {}).get('project', ''))
+        project = st.text_input(
+            "프로젝트", 
+            value=data.get('request_info', {}).get('project', ''),
+            key="edit_project"
+        )
     
     st.markdown("---")
     
@@ -333,6 +367,13 @@ def data_edit_page():
     st.subheader("🔬 시험 항목 데이터")
     
     test_items = data.get('test_items', [])
+    
+    if not test_items:
+        st.warning("시험 항목이 없습니다.")
+        if st.button("🏠 홈으로 돌아가기"):
+            st.session_state.page = 'user_selection'
+            st.rerun()
+        return
     
     # 표준화 적용
     standardized_items = []
@@ -372,16 +413,18 @@ def data_edit_page():
             
             # 마스터 정보 표시
             if item.get('test_master_id'):
-                with st.container():
-                    st.markdown("**📌 매칭된 마스터 정보**")
-                    master_info = {
-                        "Master ID": master['id'],
-                        "표준명": master['std_name'],
-                        "표준 분류": master['std_category'],
-                        "참조 규격": master['ref_standard'],
-                        "유사어": ", ".join(eval(master['aliases']) if isinstance(master['aliases'], str) else master['aliases'])
-                    }
-                    st.json(master_info)
+                master = get_master_by_id(item['test_master_id'], db)
+                if master:
+                    with st.container():
+                        st.markdown("**📌 매칭된 마스터 정보**")
+                        master_info = {
+                            "Master ID": master['id'],
+                            "표준명": master['std_name'],
+                            "표준 분류": master['std_category'],
+                            "참조 규격": master['ref_standard'],
+                            "유사어": ", ".join(eval(master['aliases']) if isinstance(master['aliases'], str) else master['aliases'])
+                        }
+                        st.json(master_info)
             
             st.markdown("---")
             
@@ -410,6 +453,9 @@ def data_edit_page():
             # custom_specs 편집
             st.markdown("**🔧 특수 조건 (Custom Specs)**")
             custom_specs = item.get('custom_specs', {})
+            if not isinstance(custom_specs, dict):
+                custom_specs = {}
+            
             custom_specs_json = st.text_area(
                 "JSON 형식으로 입력",
                 value=json.dumps(custom_specs, indent=2, ensure_ascii=False),
@@ -469,7 +515,6 @@ def data_edit_page():
                     db.add_new_master(item)
             
             st.success("✅ 데이터가 저장되었습니다!")
-
 
 # ========== 페이지 3: 계획서 초안 작성 화면 ==========
 def test_plan_page():
@@ -623,4 +668,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
