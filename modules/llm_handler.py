@@ -1,84 +1,61 @@
+import os
 import base64
 import json
-import os
-import google.generativeai as genai
-from typing import Dict, Any
+import requests
+from typing import Dict, List, Any
+
 
 class LLMHandler:
+    """LLM API 핸들러 클래스"""
+    
     def __init__(self):
-        # Gemini API 키 설정 (환경 변수 또는 Streamlit secrets 사용)
-        api_key = os.getenv('GEMINI_API_KEY') or self._get_api_key_from_secrets()
-        if api_key:
-            genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-2.5-flash')
-        else:
-            self.model = None
-    
-    def _get_api_key_from_secrets(self):
-        """Streamlit secrets에서 API 키 가져오기"""
-        try:
-            import streamlit as st
-            return st.secrets.get("GEMINI_API_KEY")
-        except:
-            return None
-    
-    def extract_test_data(self, uploaded_file) -> Dict[str, Any]:
-        """시험 규격 문서에서 데이터 추출"""
+        # Gemini API 키 (환경 변수에서 가져오기)
+        self.api_key = os.getenv('GEMINI_API_KEY', '')
+        self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
         
-        if not self.model:
-            # API 키가 없을 경우 샘플 데이터 반환
-            return self._get_sample_extracted_data()
+    def extract_from_document(self, uploaded_file) -> Dict[str, Any]:
+        """
+        업로드된 문서에서 시험 규격 데이터 추출
         
+        Args:
+            uploaded_file: Streamlit UploadedFile 객체
+            
+        Returns:
+            추출된 데이터 딕셔너리
+        """
         try:
-            # 파일을 base64로 인코딩
+            # 파일을 Base64로 인코딩
             file_bytes = uploaded_file.read()
-            file_base64 = base64.b64encode(file_bytes).decode('utf-8')
+            base64_data = base64.b64encode(file_bytes).decode('utf-8')
             
             # MIME 타입 결정
-            mime_type = 'application/pdf' if uploaded_file.name.endswith('.pdf') else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            
-            # 마스터 데이터 로드
-            from modules.database import DatabaseManager
-            db = DatabaseManager()
-            masters = db.load_master_data()
-            master_json = masters.to_dict('records')
+            if uploaded_file.name.endswith('.pdf'):
+                mime_type = 'application/pdf'
+            elif uploaded_file.name.endswith('.docx'):
+                mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            else:
+                mime_type = 'application/octet-stream'
             
             # 프롬프트 생성
-            prompt = self._create_extraction_prompt(master_json)
+            prompt = self._get_extraction_prompt()
             
-            # Gemini API 호출
-            response = self.model.generate_content([
-                prompt,
-                {
-                    'mime_type': mime_type,
-                    'data': file_base64
-                }
-            ])
+            # API 호출
+            if self.api_key:
+                response = self._call_gemini_api(prompt, base64_data, mime_type)
+                
+                if response:
+                    return self._parse_response(response)
             
-            # JSON 파싱
-            result_text = response.text
-            
-            # JSON 추출 (마크다운 코드 블록 제거)
-            if '```json' in result_text:
-                result_text = result_text.split('```json')[1].split('```')[0]
-            elif '```' in result_text:
-                result_text = result_text.split('```')[1].split('```')[0]
-            
-            extracted_data = json.loads(result_text.strip())
-            
-            return extracted_data
+            # API 키가 없거나 실패 시 더미 데이터 반환
+            return self._get_dummy_data()
             
         except Exception as e:
-            print(f"LLM 추출 오류: {str(e)}")
-            # 오류 시 샘플 데이터 반환
-            return self._get_sample_extracted_data()
+            print(f"문서 추출 오류: {e}")
+            return self._get_dummy_data()
     
-    def _create_extraction_prompt(self, master_data):
-        """시험 규격 추출 프롬프트 생성"""
-        
-        master_json_str = json.dumps(master_data, ensure_ascii=False, indent=2)
-        
-        prompt = f"""# Role
+    def _get_extraction_prompt(self) -> str:
+        """시험 규격 데이터 추출 프롬프트"""
+        return """# Role
 너는 차량용 블로워 모터(Blower Motor) 시험 규격 분석가야.
 첨부된 비정형 제품 시험 규격 문서에서 핵심 시험 항목과 조건을 추출하여 정해진 JSON 형식으로 변환하는 업무를 수행해.
 
@@ -94,39 +71,172 @@ class LLMHandler:
 4. **엄격한 형식**: JSON 외의 설명이나 서론은 생략하고 순수 JSON 코드만 출력할 것.
 
 # Schema Definition (JSON)
-{{
-  "request_info": {{ "client": "발주처명", "project": "프로젝트명" }},
+{
+  "request_info": { "client": "발주처명", "project": "프로젝트명" },
   "test_items": [
-    {{
-      "test_name": "표준 시험명(예: High Temperature,  Low Temperature, Noise,  Random Vibration 등)",
+    {
+      "test_name": "표준 시험명(예: High Temperature, Low Temperature, Noise, Random Vibration 등)",
       "category": "분류(예: Operational and Environmental tests, Electrical Tests 등)",
       "ref_standard": "참조 규격 (예: ISO 20653, ISO 16750-3 등)",
       "sample_assembly": "시험에 사용되는 시료의 부품 구성(예: Motor only, HVAC 등)",
       "test_sample_no": "시험에 사용되는 샘플 번호",
       "sample_count": "시료 수; 단일 시험 항목에 필요한 시료 수",
       "test_duration": "단일 시험 항목에 필요한 일수(days)",
-      "test_instrument": "시험 기기 이름",
+      "test_equipment": "시험 기기 이름",
       "test_master_id": "매핑 된 시험 마스터 데이터 ID",
-      "custom_specs": {{
+      "custom_specs": {
         "temperature": "온도 조건(단위 포함)",
         "voltage": "전압 조건(단위 포함)",
         "other_conditions_1": "기타 특이사항1",
         "other_conditions_2": "기타 특이사항2"
-      }}
-    }}
+      }
+    }
   ]
-}}
+}
 
 # test_master (표준 시험 규격 정의) (JSON)
-{master_json_str}
+[
+  {
+    "id": "M001",
+    "std_name": "On & Off Test",
+    "std_category": "Endurance Test",
+    "ref_standard": "",
+    "aliases": ["작동성 시험", "온오프", "On/Off"]
+  },
+  {
+    "id": "M002",
+    "std_name": "High Temperature Test",
+    "std_category": "Environmental Test",
+    "ref_standard": "ISO 16750-4",
+    "aliases": ["고온 시험", "고온 내구", "High Temp"]
+  },
+  {
+    "id": "M003",
+    "std_name": "Low Temperature Test",
+    "std_category": "Environmental Test",
+    "ref_standard": "ISO 16750-4",
+    "aliases": ["저온 시험", "저온 내구", "Low Temp"]
+  },
+  {
+    "id": "M004",
+    "std_name": "Noise Test",
+    "std_category": "Performance Test",
+    "ref_standard": "",
+    "aliases": ["소음 시험", "노이즈", "Sound"]
+  },
+  {
+    "id": "M005",
+    "std_name": "Random Vibration Test",
+    "std_category": "Mechanical Test",
+    "ref_standard": "ISO 16750-3",
+    "aliases": ["진동 시험", "Vibration"]
+  },
+  {
+    "id": "M006",
+    "std_name": "Dust Protection Test",
+    "std_category": "Environmental Test",
+    "ref_standard": "ISO 20653",
+    "aliases": ["분진 시험", "Dust"]
+  },
+  {
+    "id": "M007",
+    "std_name": "Water Protection Test",
+    "std_category": "Environmental Test",
+    "ref_standard": "ISO 20653",
+    "aliases": ["방수 시험", "Water"]
+  },
+  {
+    "id": "M008",
+    "std_name": "EMC Test",
+    "std_category": "Electrical Tests",
+    "ref_standard": "ISO 11452",
+    "aliases": ["전자파 적합성", "EMI/EMC"]
+  },
+  {
+    "id": "M009",
+    "std_name": "Undervoltage and Overvoltage Test",
+    "std_category": "Electrical Tests",
+    "ref_standard": "ISO 16750-3",
+    "aliases": ["과저전압", "정지 전압 확인", "Under/Over Voltage"]
+  }
+]
 
-위 정보를 바탕으로 첨부된 문서에서 시험 규격 데이터를 추출하여 JSON 형식으로 출력해줘.
-"""
-        
-        return prompt
+문서를 분석하고 위 형식에 맞춰 JSON만 출력해줘."""
     
-    def _get_sample_extracted_data(self):
-        """샘플 추출 데이터 (API 키가 없거나 오류 시)"""
+    def _call_gemini_api(self, prompt: str, base64_data: str, mime_type: str) -> str:
+        """Gemini API 호출"""
+        try:
+            headers = {
+                'Content-Type': 'application/json'
+            }
+            
+            payload = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": prompt},
+                            {
+                                "inline_data": {
+                                    "mime_type": mime_type,
+                                    "data": base64_data
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "topK": 40,
+                    "topP": 0.95,
+                    "maxOutputTokens": 8192,
+                }
+            }
+            
+            response = requests.post(
+                f"{self.api_url}?key={self.api_key}",
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                if 'candidates' in result and len(result['candidates']) > 0:
+                    text = result['candidates'][0]['content']['parts'][0]['text']
+                    return text
+            
+            return None
+            
+        except Exception as e:
+            print(f"API 호출 오류: {e}")
+            return None
+    
+    def _parse_response(self, response: str) -> Dict[str, Any]:
+        """API 응답 파싱"""
+        try:
+            # JSON 코드 블록 제거
+            response = response.strip()
+            if response.startswith('```json'):
+                response = response[7:]
+            if response.startswith('```'):
+                response = response[3:]
+            if response.endswith('```'):
+                response = response[:-3]
+            
+            response = response.strip()
+            
+            # JSON 파싱
+            data = json.loads(response)
+            return data
+            
+        except Exception as e:
+            print(f"응답 파싱 오류: {e}")
+            return self._get_dummy_data()
+    
+    def _get_dummy_data(self) -> Dict[str, Any]:
+        """더미 데이터 반환 (테스트용)"""
         return {
             "request_info": {
                 "client": "Sample Client",
@@ -141,11 +251,12 @@ class LLMHandler:
                     "test_sample_no": "S001",
                     "sample_count": "3",
                     "test_duration": "5",
-                    "test_instrument": "Temperature Chamber",
+                    "test_equipment": "Temperature Chamber",
                     "test_master_id": "M002",
                     "custom_specs": {
                         "temperature": "85°C",
-                        "duration": "1000 hours"
+                        "voltage": "12V",
+                        "duration": "1000hr"
                     }
                 },
                 {
@@ -156,25 +267,43 @@ class LLMHandler:
                     "test_sample_no": "S002",
                     "sample_count": "3",
                     "test_duration": "5",
-                    "test_instrument": "Temperature Chamber",
+                    "test_equipment": "Temperature Chamber",
                     "test_master_id": "M003",
                     "custom_specs": {
                         "temperature": "-40°C",
-                        "duration": "500 hours"
+                        "voltage": "12V",
+                        "duration": "500hr"
                     }
                 },
                 {
-                    "test_name": "Noise Test",
-                    "category": "Performance Test",
-                    "ref_standard": "",
+                    "test_name": "Random Vibration Test",
+                    "category": "Mechanical Test",
+                    "ref_standard": "ISO 16750-3",
                     "sample_assembly": "HVAC",
                     "test_sample_no": "S003",
                     "sample_count": "3",
-                    "test_duration": "2",
-                    "test_instrument": "Sound Level Meter",
-                    "test_master_id": "M004",
+                    "test_duration": "3",
+                    "test_equipment": "Vibration Shaker",
+                    "test_master_id": "M005",
                     "custom_specs": {
-                        "max_noise_level": "< 60 dB"
+                        "frequency": "10-500Hz",
+                        "acceleration": "5g RMS"
+                    }
+                },
+                {
+                    "test_name": "Undervoltage and Overvoltage Test",
+                    "category": "Electrical Tests",
+                    "ref_standard": "ISO 16750-3",
+                    "sample_assembly": "Motor only",
+                    "test_sample_no": "S004",
+                    "sample_count": "3",
+                    "test_duration": "2",
+                    "test_equipment": "Power Supply",
+                    "test_master_id": "M009",
+                    "custom_specs": {
+                        "undervoltage": "9V",
+                        "overvoltage": "16V",
+                        "duration": "1min each"
                     }
                 }
             ]
