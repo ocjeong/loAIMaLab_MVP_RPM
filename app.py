@@ -130,7 +130,6 @@ def get_sample_pdf_files():
     
     return pdf_files
 
-# ========== 페이지 1: 사용자 선택 화면 ========== 부분을 아래와 같이 수정
 # ========== 페이지 1: 사용자 선택 화면 ==========
 def user_selection_page():
     st.title("🔧 RPM - Reliable Planning Manager")
@@ -322,7 +321,6 @@ def user_selection_page():
             st.warning("사용자를 선택하면 일정을 확인할 수 있습니다.")
 
 
-# ========== 페이지 2: 추출 시험 규격 편집 화면 ==========
 # ========== 페이지 2: 추출 시험 규격 편집 화면 ==========
 def data_edit_page():
     st.title("📝 시험 규격 데이터 편집")
@@ -668,5 +666,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
