@@ -164,28 +164,48 @@ class Database:
             return result.iloc[0]
         return None
     
-    def save_request(self, user_id, client, project, extracted_data, final_data):
-        new_id = f"R{str(len(self.request_info_df) + 1).zfill(5)}"
-        
-        new_request = pd.DataFrame([{
-            'id': new_id,
-            'user_id': user_id,
-            'extracted_data': json.dumps(extracted_data, ensure_ascii=False),
-            'final_data': json.dumps(final_data, ensure_ascii=False),
-            'is_verified': False,
-            'client': client,
-            'project': project,
-            'created_date': datetime.now().strftime('%Y-%m-%d')
-        }])
-        
-        self.request_info_df = pd.concat([self.request_info_df, new_request], ignore_index=True)
-        self.request_info_df.to_csv(self.request_info_path, index=False)
-        
-        # Test Item 저장
-        for item in final_data:
-            self.save_test_item(item, new_id)
-        
-        return new_id
+def save_request(self, user_id, client, project, extracted_data, final_data):
+    # 기존 request_id 확인 (수정 모드인 경우)
+    if st.session_state.current_request:
+        # 기존 의뢰 업데이트
+        idx = self.request_info_df[self.request_info_df['id'] == st.session_state.current_request].index
+        if not idx.empty:
+            self.request_info_df.loc[idx[0], 'final_data'] = json.dumps(final_data, ensure_ascii=False)
+            self.request_info_df.loc[idx[0], 'client'] = client
+            self.request_info_df.loc[idx[0], 'project'] = project
+            self.request_info_df.to_csv(self.request_info_path, index=False)
+            
+            # 기존 Test Item 삭제 후 재저장
+            self.test_item_df = self.test_item_df[
+                self.test_item_df['request_id'] != st.session_state.current_request
+            ]
+            for item in final_data:
+                self.save_test_item(item, st.session_state.current_request)
+            
+            return st.session_state.current_request
+    
+    # 새 의뢰 생성
+    new_id = f"R{str(len(self.request_info_df) + 1).zfill(5)}"
+    
+    new_request = pd.DataFrame([{
+        'id': new_id,
+        'user_id': user_id,
+        'extracted_data': json.dumps(extracted_data, ensure_ascii=False),
+        'final_data': json.dumps(final_data, ensure_ascii=False),
+        'is_verified': False,
+        'client': client,
+        'project': project,
+        'created_date': datetime.now().strftime('%Y-%m-%d')
+    }])
+    
+    self.request_info_df = pd.concat([self.request_info_df, new_request], ignore_index=True)
+    self.request_info_df.to_csv(self.request_info_path, index=False)
+    
+    # Test Item 저장
+    for item in final_data:
+        self.save_test_item(item, new_id)
+    
+    return new_id
     
     def save_test_item(self, item, request_id):
         new_item = pd.DataFrame([{
