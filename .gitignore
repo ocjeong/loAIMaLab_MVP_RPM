@@ -26,8 +26,8 @@ wheels/
 # Streamlit
 .streamlit/secrets.toml
 
-# Data files
-data/*.csv
+# Data files (선택적)
+# data/*.csv
 
 # IDE
 .vscode/
@@ -39,10 +39,6 @@ data/*.csv
 # OS
 .DS_Store
 Thumbs.db
-
-# Environment
-.env
-.env.local
 
 # Logs
 *.log
