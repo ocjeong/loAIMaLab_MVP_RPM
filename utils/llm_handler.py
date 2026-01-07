@@ -122,10 +122,9 @@ class LLMHandler:
       "test_equipment": "시험 기기 이름",
       "test_master_id": "매핑 된 시험 마스터 데이터 ID",
       "custom_specs": {{
-        "temperature": "온도 조건(단위 포함)",
-        "voltage": "전압 조건(단위 포함)",
-        "other_conditions_1": "기타 특이사항1",
-        "other_conditions_2": "기타 특이사항2"
+        "example_conditions_1": "예시 특이사항 1; 해당 시험 세부 조건",
+        "example_conditions_2": "예시 특이사항 2; 발주처 특화 시험 조건",
+        "example_conditions_3": "예시 특이사항 3; 제품 특화 시험 조건"
       }}
     }}
   ]
