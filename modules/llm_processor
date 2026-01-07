@@ -5,6 +5,7 @@ import os
 from io import BytesIO
 import PyPDF2
 from docx import Document
+# 기존 LLMProcessor 클래스에 메서드 추가
 
 class LLMProcessor:
     def __init__(self, db):
@@ -24,6 +25,15 @@ class LLMProcessor:
             file_content = uploaded_file.read()
             file_type = uploaded_file.type
             
+            return self.process_document_from_bytes(file_content, file_type)
+            
+        except Exception as e:
+            print(f"Error processing document: {e}")
+            return None
+    
+    def process_document_from_bytes(self, file_content, file_type):
+        """바이트 데이터로부터 문서 처리 및 데이터 추출 (새로 추가)"""
+        try:
             # 텍스트 추출
             if 'pdf' in file_type:
                 text = self._extract_text_from_pdf(file_content)
@@ -42,8 +52,11 @@ class LLMProcessor:
             return extracted_data
             
         except Exception as e:
-            print(f"Error processing document: {e}")
+            print(f"Error processing document from bytes: {e}")
             return None
+    
+    # 나머지 메서드들은 동일...
+
     
     def _extract_text_from_pdf(self, file_content):
         """PDF에서 텍스트 추출"""
