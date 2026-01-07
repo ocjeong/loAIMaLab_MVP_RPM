@@ -1,5 +1,7 @@
 import streamlit as st
 from datetime import datetime
+import os
+import glob
 
 
 def initialize_session_state():
@@ -21,6 +23,57 @@ def initialize_session_state():
     
     if 'show_delete_modal' not in st.session_state:
         st.session_state.show_delete_modal = False
+
+
+def get_sample_pdf_files():
+    """sample 폴더에서 PDF 파일 목록 가져오기"""
+    sample_dir = 'sample'
+    
+    # sample 폴더가 없으면 생성
+    if not os.path.exists(sample_dir):
+        os.makedirs(sample_dir)
+        return []
+    
+    # PDF 파일 찾기
+    pdf_files = glob.glob(os.path.join(sample_dir, '*.pdf'))
+    
+    # 파일명만 추출 (경로 제외)
+    sample_files = []
+    for pdf_path in pdf_files:
+        filename = os.path.basename(pdf_path)
+        sample_files.append({
+            'name': filename,
+            'path': pdf_path,
+            'display_name': filename.replace('.pdf', '').replace('_', ' ').title()
+        })
+    
+    return sample_files
+
+
+def load_sample_pdf(file_path):
+    """샘플 PDF 파일을 읽어서 UploadedFile과 유사한 객체로 반환"""
+    try:
+        with open(file_path, 'rb') as f:
+            file_bytes = f.read()
+        
+        # UploadedFile과 유사한 객체 생성
+        class SampleFile:
+            def __init__(self, name, data):
+                self.name = name
+                self._data = data
+            
+            def read(self):
+                return self._data
+            
+            def getvalue(self):
+                return self._data
+        
+        filename = os.path.basename(file_path)
+        return SampleFile(filename, file_bytes)
+    
+    except Exception as e:
+        st.error(f"샘플 파일 로드 오류: {e}")
+        return None
 
 
 def load_css():
@@ -120,6 +173,21 @@ def load_css():
         .icon-error {
             color: #dc3545;
             font-size: 1.2em;
+        }
+        
+        /* 샘플 파일 버튼 스타일 */
+        .sample-file-button {
+            background-color: #70AD47;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 0.25rem;
+        }
+        
+        .sample-file-button:hover {
+            background-color: #5a8c38;
         }
         </style>
     """, unsafe_allow_html=True)
