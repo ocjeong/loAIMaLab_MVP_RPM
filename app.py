@@ -364,4 +364,223 @@ def page_edit_extraction():
                     key=f"duration_{idx}"
                 )
                 standardized_item['test_equipment'] = st.text_input(
-                    "시험 장
+                    "시험 장비",
+                    value=standardized_item.get('test_equipment', ''),
+                    key=f"equipment_{idx}"
+                )
+            
+            # test_master_id 표시 (읽기 전용)
+            st.text_input(
+                "마스터 ID (자동 매칭)",
+                value=item.get('test_master_id', ''),
+                key=f"master_id_{idx}",
+                disabled=True,
+                help="LLM이 자동으로 매칭한 마스터 ID입니다"
+            )
+            
+            # Custom Specs 편집
+            st.markdown("**⚙️ 특수 요구사항**")
+            custom_specs = standardized_item.get('custom_specs', {})
+            custom_specs_json = st.text_area(
+                "Custom Specs (JSON)",
+                value=json.dumps(custom_specs, ensure_ascii=False, indent=2),
+                height=150,
+                key=f"custom_{idx}"
+            )
+            
+            try:
+                standardized_item['custom_specs'] = json.loads(custom_specs_json)
+            except:
+                st.warning("JSON 형식이 올바르지 않습니다")
+            
+            # 업데이트
+            test_items[idx] = standardized_item
+    
+    data['test_items'] = test_items
+    
+    # 버튼
+    st.markdown("---")
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
+    
+    with col_btn1:
+        if st.button("📝 계획서 생성", type="primary", use_container_width=True):
+            # 데이터 저장
+            st.session_state.db_manager.save_request(
+                request_id=st.session_state.current_request,
+                user_id=st.session_state.current_user['id'],
+                extracted_data=st.session_state.extracted_data,
+                final_data=data,
+                client=client,
+                project=project
+            )
+            
+            # 마스터 데이터 업데이트
+            st.session_state.db_manager.update_master_aliases(data['test_items'])
+            
+            st.success("✅ 데이터가 저장되었습니다!")
+            st.session_state.current_page = 'planning'
+            st.rerun()
+    
+    with col_btn2:
+        if st.button("💾 의뢰 데이터 저장", use_container_width=True):
+            st.session_state.db_manager.save_request(
+                request_id=st.session_state.current_request,
+                user_id=st.session_state.current_user['id'],
+                extracted_data=st.session_state.extracted_data,
+                final_data=data,
+                client=client,
+                project=project
+            )
+            
+            # 마스터 데이터 업데이트
+            st.session_state.db_manager.update_master_aliases(data['test_items'])
+            
+            st.success("✅ 데이터가 저장되었습니다!")
+
+
+def page_planning():
+    """3.3. 계획서 초안 작성 화면"""
+    st.title("📊 계획서 초안 작성")
+    
+    if not st.session_state.extracted_data:
+        st.error("추출된 데이터가 없습니다")
+        return
+    
+    data = st.session_state.extracted_data
+    test_items = data.get('test_items', [])
+    
+    # 계획서 생성
+    planning_module = PlanningModule()
+    plan_data = planning_module.create_plan(test_items)
+    
+    # 시험 계획서 출력
+    st.subheader("📋 시험 계획서")
+    
+    # 샘플 데이터 로드 버튼
+    if st.button("🔄 샘플 데이터 로드"):
+        sample_data = planning_module.load_sample_data()
+        plan_data = sample_data
+        st.success("샘플 데이터를 불러왔습니다")
+    
+    # 그룹별로 표시
+    groups = {}
+    for item in plan_data:
+        category = item.get('category', 'Other')
+        if category not in groups:
+            groups[category] = []
+        groups[category].append(item)
+    
+    for category, items in groups.items():
+        st.markdown(f"### {category}")
+        
+        # 테이블 형태로 표시
+        df_items = pd.DataFrame(items)
+        
+        # 편집 가능한 데이터 에디터
+        edited_df = st.data_editor(
+            df_items,
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config={
+                "test_name": st.column_config.TextColumn("시험명", width="medium"),
+                "category": st.column_config.TextColumn("분류", width="small"),
+                "ref_standard": st.column_config.TextColumn("참조 규격", width="small"),
+                "sample_count": st.column_config.NumberColumn("시료 수", width="small"),
+                "test_duration": st.column_config.NumberColumn("기간(days)", width="small"),
+            }
+        )
+        
+        # 업데이트된 데이터 반영
+        groups[category] = edited_df.to_dict('records')
+    
+    # 전체 계획 데이터 업데이트
+    plan_data = []
+    for items in groups.values():
+        plan_data.extend(items)
+    
+    # 시료 수 검증
+    total_samples = planning_module.calculate_total_samples(plan_data)
+    st.info(f"**총 필요 시료 수:** {total_samples}개")
+    
+    # 버튼
+    st.markdown("---")
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
+    
+    with col_btn1:
+        if st.button("📥 계획서 저장 (Excel)", type="primary", use_container_width=True):
+            excel_file = planning_module.export_to_excel(
+                plan_data,
+                st.session_state.current_user['user_name']
+            )
+            
+            st.download_button(
+                label="📥 Excel 다운로드",
+                data=excel_file,
+                file_name=f"Test_Plan_{st.session_state.current_user['user_name']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    
+    with col_btn2:
+        if st.button("📅 일정 생성", use_container_width=True):
+            st.session_state.plan_data = plan_data
+            st.session_state.current_page = 'scheduling'
+            st.rerun()
+
+
+def page_scheduling():
+    """3.4. 시험 일정 관리 화면"""
+    st.title("📅 시험 일정 관리")
+    
+    if 'plan_data' not in st.session_state or not st.session_state.plan_data:
+        st.error("계획서 데이터가 없습니다")
+        return
+    
+    plan_data = st.session_state.plan_data
+    
+    # 일정 생성
+    scheduling_module = SchedulingModule()
+    schedule = scheduling_module.create_schedule(plan_data)
+    
+    st.subheader("📊 타임라인 (D-Day)")
+    
+    # Gantt Chart 표시
+    gantt_fig = scheduling_module.create_gantt_chart_from_schedule(schedule)
+    st.plotly_chart(gantt_fig, use_container_width=True)
+    
+    # 일정 테이블
+    st.subheader("📋 상세 일정")
+    df_schedule = pd.DataFrame(schedule)
+    st.dataframe(df_schedule, use_container_width=True)
+    
+    # 버튼
+    st.markdown("---")
+    col_btn1, col_btn2 = st.columns([1, 3])
+    
+    with col_btn1:
+        if st.button("💾 타임라인 저장", type="primary", use_container_width=True):
+            # 일정을 DB에 저장
+            st.session_state.db_manager.save_schedule(
+                request_id=st.session_state.current_request,
+                user_id=st.session_state.current_user['id'],
+                schedule=schedule
+            )
+            st.success("✅ 일정이 저장되었습니다!")
+            
+            # 사용자 선택 화면으로 돌아가기
+            if st.button("🏠 메인으로 돌아가기"):
+                st.session_state.current_page = 'user_selection'
+                st.rerun()
+
+
+# 페이지 라우팅
+page_map = {
+    'user_selection': page_user_selection,
+    'new_request': page_new_request,
+    'edit_extraction': page_edit_extraction,
+    'planning': page_planning,
+    'scheduling': page_scheduling
+}
+
+# 현재 페이지 렌더링
+current_page_func = page_map.get(st.session_state.current_page, page_user_selection)
+current_page_func()
