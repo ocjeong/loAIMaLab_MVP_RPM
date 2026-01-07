@@ -1,0 +1,11 @@
+id,std_name,std_category,aliases,ref_standard
+M001,On & Off Test,Endurance Test,"[""작동성 시험"", ""온오프""]",
+M002,High Temperature Test,Environmental Test,"[""고온 시험"", ""고온 내구""]",ISO 16750-3
+M003,Low Temperature Test,Environmental Test,"[""저온 시험"", ""저온 내구""]",ISO 16750-3
+M004,Noise Test,Operational and Environmental tests,"[""소음 시험"", ""소음 측정""]",
+M005,Random Vibration Test,Environmental Test,"[""진동 시험"", ""랜덤 진동""]",ISO 16750-3
+M006,Dust Protection Test,Environmental Test,"[""방진 시험"", ""먼지 보호""]",ISO 20653
+M007,Water Protection Test,Environmental Test,"[""방수 시험"", ""침수 시험""]",ISO 20653
+M008,Salt Spray Test,Environmental Test,"[""염수 분무"", ""내식성 시험""]",ISO 9227
+M009,Undervoltage and Overvoltage Test,Electrical Tests,"[""과저전압"", ""정지 전압 확인""]",ISO 16750-3
+M010,Reverse Polarity Test,Electrical Tests,"[""역극성"", ""극성 반전""]",ISO 16750-3
