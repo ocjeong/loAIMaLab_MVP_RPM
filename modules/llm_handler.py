@@ -1,75 +1,84 @@
-import google.generativeai as genai
-import os
 import base64
 import json
-from dotenv import load_dotenv
-
-load_dotenv()
+import os
+import google.generativeai as genai
+from typing import Dict, Any
 
 class LLMHandler:
     def __init__(self):
-        api_key = os.getenv('GEMINI_API_KEY')
-        if not api_key:
-            # Streamlit secrets에서 가져오기
-            try:
-                import streamlit as st
-                api_key = st.secrets.get("GEMINI_API_KEY")
-            except:
-                pass
-        
+        # Gemini API 키 설정 (환경 변수 또는 Streamlit secrets 사용)
+        api_key = os.getenv('GEMINI_API_KEY') or self._get_api_key_from_secrets()
         if api_key:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-2.5-flash')
+            self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
         else:
             self.model = None
     
-    def extract_test_specifications(self, uploaded_file):
-        """업로드된 파일에서 시험 규격 데이터 추출"""
+    def _get_api_key_from_secrets(self):
+        """Streamlit secrets에서 API 키 가져오기"""
+        try:
+            import streamlit as st
+            return st.secrets.get("GEMINI_API_KEY")
+        except:
+            return None
+    
+    def extract_test_data(self, uploaded_file) -> Dict[str, Any]:
+        """시험 규격 문서에서 데이터 추출"""
+        
         if not self.model:
             # API 키가 없을 경우 샘플 데이터 반환
-            return self._get_sample_data()
+            return self._get_sample_extracted_data()
         
         try:
             # 파일을 base64로 인코딩
             file_bytes = uploaded_file.read()
-            file_b64 = base64.b64encode(file_bytes).decode('utf-8')
+            file_base64 = base64.b64encode(file_bytes).decode('utf-8')
             
             # MIME 타입 결정
-            mime_type = "application/pdf" if uploaded_file.name.endswith('.pdf') else \
-                       "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            mime_type = 'application/pdf' if uploaded_file.name.endswith('.pdf') else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
             
-            # 프롬프트 구성
-            prompt = self._get_extraction_prompt()
+            # 마스터 데이터 로드
+            from modules.database import DatabaseManager
+            db = DatabaseManager()
+            masters = db.load_master_data()
+            master_json = masters.to_dict('records')
             
-            # API 호출
+            # 프롬프트 생성
+            prompt = self._create_extraction_prompt(master_json)
+            
+            # Gemini API 호출
             response = self.model.generate_content([
                 prompt,
                 {
-                    "mime_type": mime_type,
-                    "data": file_b64
+                    'mime_type': mime_type,
+                    'data': file_base64
                 }
             ])
             
             # JSON 파싱
             result_text = response.text
-            # JSON 부분만 추출 (```json ... ``` 형태로 올 수 있음)
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0]
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0]
+            
+            # JSON 추출 (마크다운 코드 블록 제거)
+            if '```json' in result_text:
+                result_text = result_text.split('```json')[1].split('```')[0]
+            elif '```' in result_text:
+                result_text = result_text.split('```')[1].split('```')[0]
             
             extracted_data = json.loads(result_text.strip())
+            
             return extracted_data
-        
+            
         except Exception as e:
             print(f"LLM 추출 오류: {str(e)}")
-            # 오류 발생 시 샘플 데이터 반환
-            return self._get_sample_data()
+            # 오류 시 샘플 데이터 반환
+            return self._get_sample_extracted_data()
     
-    def _get_extraction_prompt(self):
-        """시험 규격 추출 프롬프트"""
-        return """
-# Role
+    def _create_extraction_prompt(self, master_data):
+        """시험 규격 추출 프롬프트 생성"""
+        
+        master_json_str = json.dumps(master_data, ensure_ascii=False, indent=2)
+        
+        prompt = f"""# Role
 너는 차량용 블로워 모터(Blower Motor) 시험 규격 분석가야.
 첨부된 비정형 제품 시험 규격 문서에서 핵심 시험 항목과 조건을 추출하여 정해진 JSON 형식으로 변환하는 업무를 수행해.
 
@@ -85,11 +94,11 @@ class LLMHandler:
 4. **엄격한 형식**: JSON 외의 설명이나 서론은 생략하고 순수 JSON 코드만 출력할 것.
 
 # Schema Definition (JSON)
-{
-  "request_info": { "client": "발주처명", "project": "프로젝트명" },
+{{
+  "request_info": {{ "client": "발주처명", "project": "프로젝트명" }},
   "test_items": [
-    {
-      "test_name": "표준 시험명(예: High Temperature, Low Temperature, Noise, Random Vibration 등)",
+    {{
+      "test_name": "표준 시험명(예: High Temperature,  Low Temperature, Noise,  Random Vibration 등)",
       "category": "분류(예: Operational and Environmental tests, Electrical Tests 등)",
       "ref_standard": "참조 규격 (예: ISO 20653, ISO 16750-3 등)",
       "sample_assembly": "시험에 사용되는 시료의 부품 구성(예: Motor only, HVAC 등)",
@@ -98,141 +107,74 @@ class LLMHandler:
       "test_duration": "단일 시험 항목에 필요한 일수(days)",
       "test_instrument": "시험 기기 이름",
       "test_master_id": "매핑 된 시험 마스터 데이터 ID",
-      "custom_specs": {
+      "custom_specs": {{
         "temperature": "온도 조건(단위 포함)",
         "voltage": "전압 조건(단위 포함)",
         "other_conditions_1": "기타 특이사항1",
         "other_conditions_2": "기타 특이사항2"
-      }
-    }
+      }}
+    }}
   ]
-}
+}}
 
 # test_master (표준 시험 규격 정의) (JSON)
-[
-  {
-    "id": "M001",
-    "std_name": "On & Off Test",
-    "std_category": "Endurance Test",
-    "ref_standard": "",
-    "aliases": ["작동성 시험", "온오프"]
-  },
-  {
-    "id": "M002",
-    "std_name": "High Temperature Test",
-    "std_category": "Environmental Test",
-    "ref_standard": "ISO 16750-3",
-    "aliases": ["고온 시험", "고온 내구"]
-  },
-  {
-    "id": "M003",
-    "std_name": "Low Temperature Test",
-    "std_category": "Environmental Test",
-    "ref_standard": "ISO 16750-3",
-    "aliases": ["저온 시험", "저온 내구"]
-  },
-  {
-    "id": "M004",
-    "std_name": "Noise Test",
-    "std_category": "Operational and Environmental tests",
-    "ref_standard": "",
-    "aliases": ["소음 시험", "소음 측정"]
-  },
-  {
-    "id": "M005",
-    "std_name": "Random Vibration Test",
-    "std_category": "Environmental Test",
-    "ref_standard": "ISO 16750-3",
-    "aliases": ["진동 시험", "랜덤 진동"]
-  },
-  {
-    "id": "M006",
-    "std_name": "Dust Protection Test",
-    "std_category": "Environmental Test",
-    "ref_standard": "ISO 20653",
-    "aliases": ["방진 시험", "먼지 보호"]
-  },
-  {
-    "id": "M007",
-    "std_name": "Water Protection Test",
-    "std_category": "Environmental Test",
-    "ref_standard": "ISO 20653",
-    "aliases": ["방수 시험", "침수 시험"]
-  },
-  {
-    "id": "M008",
-    "std_name": "Salt Spray Test",
-    "std_category": "Environmental Test",
-    "ref_standard": "ISO 9227",
-    "aliases": ["염수 분무", "내식성 시험"]
-  },
-  {
-    "id": "M009",
-    "std_name": "Undervoltage and Overvoltage Test",
-    "std_category": "Electrical Tests",
-    "ref_standard": "ISO 16750-3",
-    "aliases": ["과저전압", "정지 전압 확인"]
-  },
-  {
-    "id": "M010",
-    "std_name": "Reverse Polarity Test",
-    "std_category": "Electrical Tests",
-    "ref_standard": "ISO 16750-3",
-    "aliases": ["역극성", "극성 반전"]
-  }
-]
+{master_json_str}
+
+위 정보를 바탕으로 첨부된 문서에서 시험 규격 데이터를 추출하여 JSON 형식으로 출력해줘.
 """
+        
+        return prompt
     
-    def _get_sample_data(self):
-        """API 키가 없거나 오류 발생 시 반환할 샘플 데이터"""
+    def _get_sample_extracted_data(self):
+        """샘플 추출 데이터 (API 키가 없거나 오류 시)"""
         return {
             "request_info": {
-                "client": "샘플 발주처",
-                "project": "샘플 프로젝트"
+                "client": "Sample Client",
+                "project": "Blower Motor Test Project"
             },
             "test_items": [
                 {
                     "test_name": "High Temperature Test",
                     "category": "Environmental Test",
-                    "ref_standard": "ISO 16750-3",
+                    "ref_standard": "ISO 16750-4",
                     "sample_assembly": "Motor only",
                     "test_sample_no": "S001",
                     "sample_count": "3",
-                    "test_duration": "7",
-                    "test_equipment": "Chamber",
+                    "test_duration": "5",
+                    "test_instrument": "Temperature Chamber",
                     "test_master_id": "M002",
                     "custom_specs": {
                         "temperature": "85°C",
-                        "duration": "1000hr"
+                        "duration": "1000 hours"
                     }
                 },
                 {
                     "test_name": "Low Temperature Test",
                     "category": "Environmental Test",
-                    "ref_standard": "ISO 16750-3",
+                    "ref_standard": "ISO 16750-4",
                     "sample_assembly": "Motor only",
                     "test_sample_no": "S002",
                     "sample_count": "3",
-                    "test_duration": "7",
-                    "test_equipment": "Chamber",
+                    "test_duration": "5",
+                    "test_instrument": "Temperature Chamber",
                     "test_master_id": "M003",
                     "custom_specs": {
                         "temperature": "-40°C",
-                        "duration": "1000hr"
+                        "duration": "500 hours"
                     }
                 },
                 {
                     "test_name": "Noise Test",
-                    "category": "Operational and Environmental tests",
+                    "category": "Performance Test",
                     "ref_standard": "",
                     "sample_assembly": "HVAC",
                     "test_sample_no": "S003",
                     "sample_count": "3",
                     "test_duration": "2",
-                    "test_equipment": "Anechoic Chamber",
+                    "test_instrument": "Sound Level Meter",
                     "test_master_id": "M004",
                     "custom_specs": {
-                        "measurement": "Sound pressure level"
+                        "max_noise_level": "< 60 dB"
                     }
                 }
             ]
