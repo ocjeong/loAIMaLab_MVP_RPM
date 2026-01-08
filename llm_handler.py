@@ -2,6 +2,7 @@ import google.generativeai as genai
 import json
 import base64
 from config import GEMINI_API_KEY, GEMINI_MODEL
+import pandas as pd
 
 class LLMHandler:
     def __init__(self, db_manager):
@@ -32,18 +33,28 @@ class LLMHandler:
         prompt = self._create_extraction_prompt(master_list)
         
         try:
-            # 파일 업로드 및 처리
+            # 파일을 Base64로 인코딩
+            if hasattr(file_content, 'read'):
+                file_bytes = file_content.read()
+                file_content.seek(0)  # 포인터 리셋
+            else:
+                file_bytes = file_content
+            
+            base64_data = base64.b64encode(file_bytes).decode('utf-8')
+            
+            # MIME 타입 설정
             if file_type == 'application/pdf':
                 mime_type = 'application/pdf'
             else:
                 mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
             
-            # Gemini API 호출
-            uploaded_file = genai.upload_file(file_content, mime_type=mime_type)
-            
+            # Gemini API 호출 (inline_data 방식)
             response = self.model.generate_content([
                 prompt,
-                uploaded_file
+                {
+                    "mime_type": mime_type,
+                    "data": base64_data
+                }
             ])
             
             # JSON 파싱
@@ -128,5 +139,3 @@ class LLMHandler:
             test_item['ref_standard'] = master['ref_standard']
         
         return test_item
-
-import pandas as pd
