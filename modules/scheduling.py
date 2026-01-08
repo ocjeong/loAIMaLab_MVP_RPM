@@ -10,17 +10,25 @@ class SchedulingManager:
     
     def create_dday_schedule(self, test_items: List[Dict]) -> List[Dict]:
         """D-day 기준 일정 생성"""
-        # 소요 시간 기준 정렬 (긴 것부터)
-        sorted_items = sorted(test_items, 
-                            key=lambda x: int(x.get('test_duration', 1)), 
-                            reverse=True)
+        # 소요 시간 기준 정렬 (긴 것부터) - 빈 문자열 처리 추가
+        def get_duration(item):
+            duration = item.get('test_duration', '1')
+            # 빈 문자열이거나 숫자가 아니면 기본값 1 사용
+            if not duration or duration == '' or not str(duration).strip():
+                return 1
+            try:
+                return int(duration)
+            except (ValueError, TypeError):
+                return 1
+        
+        sorted_items = sorted(test_items, key=get_duration, reverse=True)
         
         # 병렬 진행 트랙 (최대 2개)
         tracks = [0, 0]  # 각 트랙의 현재 종료일
         schedule = []
         
         for item in sorted_items:
-            duration = int(item.get('test_duration', 1))
+            duration = get_duration(item)  # 동일한 함수 재사용
             
             # 가장 빨리 끝나는 트랙 선택
             track_idx = 0 if tracks[0] <= tracks[1] else 1
