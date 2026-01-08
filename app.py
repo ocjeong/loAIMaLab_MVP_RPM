@@ -1,13 +1,16 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import os
-from modules.database import DatabaseManager
-from modules.llm_handler import LLMHandler
-from modules.standardization import standardize_test_item, get_master_by_id
-from modules.schedule import ScheduleManager
-from modules.export import ExportManager
-from utils.helpers import initialize_session_state, load_css
+from datetime import datetime, timedelta
+import json
+import base64
+from io import BytesIO
+
+from database_manager import DatabaseManager
+from llm_handler import LLMHandler
+from plan_generator import PlanGenerator
+from scheduler import Scheduler
+from utils import create_gantt_chart, create_calendar_view
+from config import *
 
 # 페이지 설정
 st.set_page_config(
@@ -18,782 +21,866 @@ st.set_page_config(
 )
 
 # 세션 상태 초기화
-initialize_session_state()
+if 'db_manager' not in st.session_state:
+    st.session_state.db_manager = DatabaseManager()
 
-# CSS 로드
-load_css()
+if 'llm_handler' not in st.session_state:
+    st.session_state.llm_handler = LLMHandler(st.session_state.db_manager)
 
-# 데이터베이스 매니저 초기화
-db = DatabaseManager()
+if 'plan_generator' not in st.session_state:
+    st.session_state.plan_generator = PlanGenerator(st.session_state.db_manager)
 
-# LLM 핸들러 초기화
-llm_handler = LLMHandler()
+if 'scheduler' not in st.session_state:
+    st.session_state.scheduler = Scheduler(st.session_state.db_manager)
 
-# 스케줄 매니저 초기화
-schedule_manager = ScheduleManager()
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 'user_selection'
 
-# 내보내기 매니저 초기화
-export_manager = ExportManager()
+if 'selected_user_id' not in st.session_state:
+    st.session_state.selected_user_id = None
 
+if 'selected_request_id' not in st.session_state:
+    st.session_state.selected_request_id = None
 
-def render_sidebar():
-    """사이드바 렌더링"""
-    with st.sidebar:
-        st.title("🔧 RPM")
-        st.markdown("### Reliable Planning Manager")
-        st.divider()
-        
-        # 3.5.1. 현재 세션 정보 표시
-        st.markdown("#### 📊 세션 정보")
-        if st.session_state.current_user:
-            st.info(f"👤 사용자: {st.session_state.current_user['user_name']}")
-        else:
-            st.warning("사용자를 선택해주세요")
-        
-        if st.session_state.current_request:
-            st.info(f"📄 의뢰: {st.session_state.current_request.get('project', 'N/A')}")
-        
-        st.divider()
-        
-        # 3.5.2. 화면 네비게이션 버튼
-        st.markdown("#### 🧭 네비게이션")
-        
-        if st.button("🏠 사용자 선택", use_container_width=True):
-            st.session_state.current_page = "user_selection"
-            st.rerun()
-        
-        if st.button("📝 시험 규격 편집", use_container_width=True, 
-                     disabled=not st.session_state.current_user):
-            st.session_state.current_page = "test_spec_edit"
-            st.rerun()
-        
-        if st.button("📋 계획서 작성", use_container_width=True,
-                     disabled=not st.session_state.current_request):
-            st.session_state.current_page = "plan_draft"
-            st.rerun()
-        
-        if st.button("📅 일정 관리", use_container_width=True,
-                     disabled=not st.session_state.schedule_data):
-            st.session_state.current_page = "schedule_management"
-            st.rerun()
-        
-        st.divider()
-        
-        # 3.5.3. Database Export 기능
-        st.markdown("#### 💾 데이터베이스 내보내기")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Master", use_container_width=True):
-                csv = db.export_to_csv('master')
-                st.download_button(
-                    "⬇️ 다운로드",
-                    csv,
-                    "Master_Test.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
-        
-        with col2:
-            if st.button("Request", use_container_width=True):
-                csv = db.export_to_csv('request')
-                st.download_button(
-                    "⬇️ 다운로드",
-                    csv,
-                    "Request_Info.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
-        
-        col3, col4 = st.columns(2)
-        with col3:
-            if st.button("Test Item", use_container_width=True):
-                csv = db.export_to_csv('test_item')
-                st.download_button(
-                    "⬇️ 다운로드",
-                    csv,
-                    "Test_Item.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
-        
-        with col4:
-            if st.button("User List", use_container_width=True):
-                csv = db.export_to_csv('user')
-                st.download_button(
-                    "⬇️ 다운로드",
-                    csv,
-                    "User_List.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
+if 'current_test_items' not in st.session_state:
+    st.session_state.current_test_items = []
 
+if 'current_plan' not in st.session_state:
+    st.session_state.current_plan = []
 
+if 'current_schedule' not in st.session_state:
+    st.session_state.current_schedule = []
+
+# 사이드바
+with st.sidebar:
+    st.title("🔧 RPM")
+    st.markdown("**Reliable Planning Manager**")
+    st.divider()
+    
+    # 현재 세션 정보
+    st.subheader("📊 현재 세션 정보")
+    
+    if st.session_state.selected_user_id:
+        users = st.session_state.db_manager.get_all_users()
+        user = users[users['id'] == st.session_state.selected_user_id]
+        if len(user) > 0:
+            st.info(f"👤 사용자: {user.iloc[0]['user_name']}")
+    else:
+        st.warning("사용자를 선택해주세요")
+    
+    if st.session_state.selected_request_id:
+        request = st.session_state.db_manager.get_request_by_id(st.session_state.selected_request_id)
+        if request:
+            st.info(f"📋 의뢰: {request['client']} - {request['project']}")
+    
+    st.divider()
+    
+    # 네비게이션
+    st.subheader("🧭 화면 전환")
+    
+    if st.button("🏠 사용자 선택", use_container_width=True):
+        st.session_state.current_page = 'user_selection'
+        st.rerun()
+    
+    if st.button("📝 시험 규격 편집", use_container_width=True, 
+                disabled=not st.session_state.selected_request_id):
+        st.session_state.current_page = 'test_spec_edit'
+        st.rerun()
+    
+    if st.button("📄 계획서 작성", use_container_width=True,
+                disabled=not st.session_state.current_test_items):
+        st.session_state.current_page = 'plan_creation'
+        st.rerun()
+    
+    if st.button("📅 일정 스케줄링", use_container_width=True,
+                disabled=not st.session_state.current_plan):
+        st.session_state.current_page = 'scheduling'
+        st.rerun()
+    
+    if st.button("📆 전체 일정 보기", use_container_width=True,
+                disabled=not st.session_state.selected_user_id):
+        st.session_state.current_page = 'schedule_view'
+        st.rerun()
+    
+    st.divider()
+    
+    # Database Export
+    st.subheader("💾 Database Export")
+    
+    export_options = ['User List', 'Master Test', 'Request Info', 'Test Item', 'Schedule Item']
+    selected_export = st.selectbox("테이블 선택", export_options)
+    
+    if st.button("CSV 다운로드", use_container_width=True):
+        df = st.session_state.db_manager.export_csv(selected_export)
+        if df is not None:
+            csv = df.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                label="📥 파일 다운로드",
+                data=csv,
+                file_name=f"{selected_export.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+# 메인 컨텐츠
 def page_user_selection():
-    """3.1. 사용자 선택 화면"""
+    """사용자 선택 화면"""
     st.title("👤 사용자 선택")
     
-    col1, col2 = st.columns([2, 3])
+    col1, col2 = st.columns([1, 2])
     
     with col1:
-        # 3.1.1. 사용자 선택 메뉴
-        st.markdown("### 사용자 선택")
+        st.subheader("사용자 선택")
         
-        users = db.get_all_users()
-        user_names = [user['user_name'] for user in users]
+        # 사용자 목록 불러오기
+        users = st.session_state.db_manager.get_all_users()
+        
+        if len(users) == 0:
+            st.warning("등록된 사용자가 없습니다. 새 사용자를 추가해주세요.")
+            user_names = []
+        else:
+            user_names = users['user_name'].tolist()
         
         selected_user_name = st.selectbox(
-            "사용자를 선택하세요",
+            "사용자 선택",
             options=user_names,
-            index=0 if user_names else None
+            key='user_select'
         )
         
-        if selected_user_name:
-            selected_user = next(u for u in users if u['user_name'] == selected_user_name)
-            st.session_state.current_user = selected_user
-            db.update_user_last_access(selected_user['id'])
-        
         # 사용자 추가
-        st.markdown("#### 새 사용자 추가")
-        new_user_name = st.text_input("사용자 이름")
-        if st.button("➕ 사용자 추가", use_container_width=True):
-            if new_user_name:
-                db.add_user(new_user_name)
-                st.success(f"✅ {new_user_name} 사용자가 추가되었습니다!")
-                st.rerun()
-            else:
-                st.error("사용자 이름을 입력해주세요.")
+        st.divider()
+        with st.expander("➕ 새 사용자 추가"):
+            new_user_name = st.text_input("사용자 이름")
+            if st.button("추가"):
+                if new_user_name:
+                    st.session_state.db_manager.add_user(new_user_name)
+                    st.success(f"✅ '{new_user_name}' 사용자가 추가되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("사용자 이름을 입력해주세요.")
+        
+        # 사용자 선택 시 세션 업데이트
+        if selected_user_name and len(users) > 0:
+            user = users[users['user_name'] == selected_user_name].iloc[0]
+            st.session_state.selected_user_id = user['id']
+            st.session_state.db_manager.update_last_access(user['id'])
+            
+            st.success(f"✅ '{selected_user_name}' 선택됨")
         
         st.divider()
         
-        # 3.1.3. 의뢰 선택 메뉴
-        if st.session_state.current_user:
-            st.markdown("### 기존 의뢰 선택")
+        # 의뢰 선택
+        if st.session_state.selected_user_id:
+            st.subheader("기존 의뢰 선택")
             
-            user_requests = db.get_user_requests(st.session_state.current_user['id'])
+            requests = st.session_state.db_manager.get_all_requests(st.session_state.selected_user_id)
             
-            if user_requests:
-                request_options = {
-                    f"{req['project']} ({req['client']})": req['id'] 
-                    for req in user_requests
-                }
+            if len(requests) > 0:
+                request_options = [
+                    f"{row['id']} - {row['client']} ({row['project']})"
+                    for _, row in requests.iterrows()
+                ]
                 
                 selected_request = st.selectbox(
-                    "의뢰를 선택하세요",
-                    options=list(request_options.keys())
+                    "의뢰 선택",
+                    options=[''] + request_options,
+                    key='request_select'
                 )
                 
                 if selected_request:
-                    request_id = request_options[selected_request]
-                    request_data = db.get_request_by_id(request_id)
-                    st.session_state.current_request = request_data
+                    request_id = selected_request.split(' - ')[0]
+                    st.session_state.selected_request_id = request_id
                     
-                    # 3.1.5. 의뢰 수정 버튼
-                    if st.button("✏️ 의뢰 수정", use_container_width=True):
-                        st.session_state.current_page = "test_spec_edit"
+                    if st.button("📝 의뢰 수정"):
+                        st.session_state.current_page = 'test_spec_edit'
                         st.rerun()
             else:
-                st.info("저장된 의뢰가 없습니다.")
+                st.info("등록된 의뢰가 없습니다.")
         
         st.divider()
         
-        # 3.1.4. 새 의뢰 버튼 (수정됨)
-        st.markdown("### 새 의뢰 생성")
-        
-        # 샘플 파일 목록 가져오기
-        from utils.helpers import get_sample_pdf_files, load_sample_pdf
-        sample_files = get_sample_pdf_files()
-        
-        # 샘플 파일 선택 메뉴 (2개 이상 있을 때만 표시)
-        selected_sample = None
-        if sample_files:
-            st.markdown("#### 📁 샘플 파일 선택")
+        # 새 의뢰 버튼
+        if st.session_state.selected_user_id:
+            st.subheader("새 의뢰 생성")
             
-            sample_options = ["직접 업로드"] + [f['display_name'] for f in sample_files]
-            selected_option = st.selectbox(
-                "샘플 파일을 선택하거나 직접 업로드하세요",
-                options=sample_options,
-                help="sample 폴더의 PDF 파일을 선택하거나 직접 파일을 업로드할 수 있습니다."
-            )
-            
-            if selected_option != "직접 업로드":
-                # 선택된 샘플 파일 찾기
-                for sample in sample_files:
-                    if sample['display_name'] == selected_option:
-                        selected_sample = sample
-                        st.info(f"📄 선택된 샘플: {selected_sample['name']}")
-                        break
-        
-        # 파일 업로드 또는 샘플 사용
-        uploaded_file = None
-        
-        if selected_sample:
-            # 샘플 파일 사용
-            st.markdown("#### 샘플 파일로 의뢰 생성")
-            if st.button("🚀 샘플로 의뢰 생성", use_container_width=True, type="primary"):
-                with st.spinner("샘플 문서를 분석하고 있습니다..."):
-                    # 샘플 파일 로드
-                    sample_file = load_sample_pdf(selected_sample['path'])
-                    
-                    if sample_file:
-                        # 파일 처리 및 LLM 추출
-                        extracted_data = llm_handler.extract_from_document(sample_file)
-                        
-                        if extracted_data:
-                            # 표준화 적용
-                            standardized_items = []
-                            for item in extracted_data.get('test_items', []):
-                                standardized_item = standardize_test_item(item, db)
-                                standardized_items.append(standardized_item)
-                            
-                            # 새 의뢰 생성
-                            request_id = db.create_request(
-                                user_id=st.session_state.current_user['id'],
-                                client=extracted_data.get('request_info', {}).get('client', ''),
-                                project=extracted_data.get('request_info', {}).get('project', ''),
-                                extracted_data=extracted_data.get('test_items', []),
-                                final_data=standardized_items
-                            )
-                            
-                            st.session_state.current_request = db.get_request_by_id(request_id)
-                            st.success("✅ 샘플 의뢰가 생성되었습니다!")
-                            st.session_state.current_page = "test_spec_edit"
-                            st.rerun()
-                        else:
-                            st.error("문서 추출에 실패했습니다.")
-                    else:
-                        st.error("샘플 파일을 로드할 수 없습니다.")
-        else:
-            # 직접 파일 업로드
-            st.markdown("#### 파일 직접 업로드")
             uploaded_file = st.file_uploader(
                 "시험 규격 파일 업로드",
                 type=['pdf', 'docx'],
-                help="PDF 또는 DOCX 형식의 파일만 업로드 가능합니다."
+                key='file_upload'
             )
             
-            if uploaded_file:
-                if st.button("🚀 새 의뢰 생성", use_container_width=True, type="primary"):
-                    with st.spinner("문서를 분석하고 있습니다..."):
-                        # 파일 처리 및 LLM 추출
-                        extracted_data = llm_handler.extract_from_document(uploaded_file)
+            if uploaded_file and st.button("🆕 새 의뢰 생성", type="primary"):
+                with st.spinner("문서를 분석하는 중..."):
+                    # 파일 처리
+                    file_content = uploaded_file.read()
+                    file_type = uploaded_file.type
+                    
+                    # LLM으로 데이터 추출
+                    result = st.session_state.llm_handler.extract_test_data(
+                        BytesIO(file_content),
+                        file_type
+                    )
+                    
+                    if result:
+                        # 의뢰 정보 저장
+                        request_info = result.get('request_info', {})
+                        test_items = result.get('test_items', [])
                         
-                        if extracted_data:
-                            # 표준화 적용
-                            standardized_items = []
-                            for item in extracted_data.get('test_items', []):
-                                standardized_item = standardize_test_item(item, db)
-                                standardized_items.append(standardized_item)
-                            
-                            # 새 의뢰 생성
-                            request_id = db.create_request(
-                                user_id=st.session_state.current_user['id'],
-                                client=extracted_data.get('request_info', {}).get('client', ''),
-                                project=extracted_data.get('request_info', {}).get('project', ''),
-                                extracted_data=extracted_data.get('test_items', []),
-                                final_data=standardized_items
-                            )
-                            
-                            st.session_state.current_request = db.get_request_by_id(request_id)
-                            st.success("✅ 의뢰가 생성되었습니다!")
-                            st.session_state.current_page = "test_spec_edit"
-                            st.rerun()
-                        else:
-                            st.error("문서 추출에 실패했습니다.")
+                        # 표준화 적용
+                        standardized_items = []
+                        for item in test_items:
+                            standardized_item = st.session_state.llm_handler.standardize_test_item(item)
+                            standardized_items.append(standardized_item)
+                        
+                        # 의뢰 추가
+                        request_id = st.session_state.db_manager.add_request(
+                            st.session_state.selected_user_id,
+                            standardized_items,
+                            request_info.get('client', ''),
+                            request_info.get('project', '')
+                        )
+                        
+                        st.session_state.selected_request_id = request_id
+                        st.session_state.current_test_items = standardized_items
+                        
+                        st.success("✅ 문서 분석 완료!")
+                        st.session_state.current_page = 'test_spec_edit'
+                        st.rerun()
+                    else:
+                        st.error("❌ 문서 분석에 실패했습니다. API 키를 확인해주세요.")
     
     with col2:
-        # 3.1.2. 일정 확인 박스
-        st.markdown("### 📅 시험 일정")
+        st.subheader("📅 일정 확인")
         
-        if st.session_state.current_user:
-            schedules = db.get_user_schedules(st.session_state.current_user['id'])
+        if st.session_state.selected_user_id:
+            # 현재 월 선택
+            current_month = datetime.now().strftime('%Y-%m')
+            selected_month = st.text_input("조회할 월 (YYYY-MM)", value=current_month)
             
-            if schedules:
-                # 선택된 의뢰의 일정 또는 전체 일정 표시
-                if st.session_state.current_request:
-                    filtered_schedules = [
-                        s for s in schedules 
-                        if s.get('request_id') == st.session_state.current_request['id']
-                    ]
-                    st.markdown(f"**{st.session_state.current_request.get('project', '')} 의뢰 일정**")
-                else:
-                    filtered_schedules = schedules
-                    st.markdown("**전체 시험 일정**")
+            # 일정 데이터 가져오기
+            schedule_df = st.session_state.db_manager.get_schedule_by_user(
+                st.session_state.selected_user_id,
+                selected_month
+            )
+            
+            if len(schedule_df) > 0:
+                # 시험 항목 정보 결합
+                test_items_df = pd.read_csv(TEST_ITEM_FILE, encoding='utf-8-sig')
+                schedule_with_info = schedule_df.merge(
+                    test_items_df[['id', 'test_name', 'request_id', 'category']],
+                    left_on='test_item_id',
+                    right_on='id',
+                    how='left'
+                )
                 
-                if filtered_schedules:
-                    fig = schedule_manager.create_gantt_chart(filtered_schedules)
+                # Gantt 차트 생성
+                fig = create_gantt_chart(
+                    schedule_with_info.to_dict('records'),
+                    color_by='request',
+                    title=f'{selected_month} 시험 일정'
+                )
+                
+                if fig:
                     st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("표시할 일정이 없습니다.")
+                
+                # 의뢰별 필터링
+                if st.session_state.selected_request_id:
+                    st.divider()
+                    st.subheader("선택된 의뢰의 일정")
+                    
+                    request_schedule = schedule_with_info[
+                        schedule_with_info['request_id'] == st.session_state.selected_request_id
+                    ]
+                    
+                    if len(request_schedule) > 0:
+                        fig2 = create_gantt_chart(
+                            request_schedule.to_dict('records'),
+                            color_by='category',
+                            title=f'의뢰 {st.session_state.selected_request_id} 일정'
+                        )
+                        
+                        if fig2:
+                            st.plotly_chart(fig2, use_container_width=True)
+                    else:
+                        st.info("선택된 의뢰의 일정이 없습니다.")
             else:
-                st.info("저장된 일정이 없습니다.")
+                st.info("등록된 일정이 없습니다.")
         else:
-            st.warning("사용자를 선택해주세요.")
-
-
+            st.warning("사용자를 먼저 선택해주세요.")
 
 def page_test_spec_edit():
-    """3.2. 추출 시험 규격 편집 화면"""
-    st.title("📝 시험 규격 편집")
+    """시험 규격 편집 화면"""
+    st.title("📝 추출 시험 규격 편집")
     
-    if not st.session_state.current_request:
-        st.warning("의뢰를 선택하거나 생성해주세요.")
+    if not st.session_state.selected_request_id:
+        st.warning("의뢰를 먼저 선택해주세요.")
         return
     
-    # 3.2.1. 의뢰 추출 데이터 박스
-    st.markdown("### 의뢰 정보")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info(f"**발주처:** {st.session_state.current_request.get('client', 'N/A')}")
-    with col2:
-        st.info(f"**프로젝트:** {st.session_state.current_request.get('project', 'N/A')}")
+    # 의뢰 정보 불러오기
+    request = st.session_state.db_manager.get_request_by_id(st.session_state.selected_request_id)
     
-    st.divider()
-    
-    # 시험 항목 편집
-    st.markdown("### 시험 항목 목록")
-    
-    final_data = st.session_state.current_request.get('final_data', [])
-    
-    if not final_data:
-        st.warning("시험 항목이 없습니다.")
+    if not request:
+        st.error("의뢰 정보를 찾을 수 없습니다.")
         return
     
-    # Expandable tree view로 표시
-    for idx, item in enumerate(final_data):
-        # 표준화 적용 여부 아이콘
-        if item.get('test_master_id'):
-            master = get_master_by_id(item['test_master_id'], db)
-            icon = "✅"
-            status = f"[마스터: {item['test_master_id']}]"
-            status_color = "green"
-        else:
-            master = None
-            icon = "⚠️"
-            status = "[미매칭]"
-            status_color = "orange"
-        
+    st.info(f"📋 의뢰: {request['client']} - {request['project']}")
+    
+    # 데이터 로드
+    if request['is_verified'] and request['final_data']:
+        test_items = request['final_data']
+    else:
+        test_items = request['extracted_data']
+    
+    st.session_state.current_test_items = test_items
+    
+    st.subheader("시험 항목 목록")
+    
+    # 시험 항목 표시 및 편집
+    for idx, item in enumerate(test_items):
         with st.expander(
-            f"{icon} {item.get('test_name', 'Unknown Test')} {status}",
-            expanded=False
+            f"{'✅' if item.get('test_master_id') else '⚠️'} "
+            f"{idx + 1}. {item.get('test_name', 'Unknown Test')}"
         ):
-            # 표준화 비교 표시
-            if master:
-                col_orig, col_std = st.columns(2)
-                
-                with col_orig:
-                    st.markdown("#### 📄 원본 데이터")
-                    st.text(f"시험명: {item.get('test_name_original', 'N/A')}")
-                    st.text(f"분류: {item.get('category_original', 'N/A')}")
-                
-                with col_std:
-                    st.markdown("#### ✨ 표준화된 데이터")
-                    st.text(f"시험명: {item.get('test_name', 'N/A')}")
-                    st.text(f"분류: {item.get('category', 'N/A')}")
-                
-                # 마스터 정보 상세 표시
-                st.markdown("#### 📋 마스터 정보")
-                st.json({
-                    "id": master.get('id'),
-                    "std_name": master.get('std_name'),
-                    "std_category": master.get('std_category'),
-                    "ref_standard": master.get('ref_standard'),
-                    "aliases": master.get('aliases', [])
-                })
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**원본 추출 데이터**")
+                st.text_input(
+                    "원본 시험명",
+                    value=item.get('test_name_original', item.get('test_name', '')),
+                    key=f"orig_name_{idx}",
+                    disabled=True
+                )
+                st.text_input(
+                    "원본 분류",
+                    value=item.get('category_original', item.get('category', '')),
+                    key=f"orig_cat_{idx}",
+                    disabled=True
+                )
+            
+            with col2:
+                st.markdown("**표준화된 데이터**")
+                item['test_name'] = st.text_input(
+                    "표준 시험명",
+                    value=item.get('test_name', ''),
+                    key=f"std_name_{idx}"
+                )
+                item['category'] = st.text_input(
+                    "표준 분류",
+                    value=item.get('category', ''),
+                    key=f"std_cat_{idx}"
+                )
+            
+            # 마스터 정보 표시
+            if item.get('test_master_id'):
+                master = st.session_state.db_manager.get_master_by_id(item['test_master_id'])
+                if master:
+                    st.success(f"✅ 매칭됨: [마스터 ID: {master['id']}]")
+                    st.json({
+                        'master_id': master['id'],
+                        'std_name': master['std_name'],
+                        'std_category': master['std_category'],
+                        'ref_standard': master['ref_standard'],
+                        'aliases': master['aliases']
+                    })
+            else:
+                st.warning("⚠️ [미매칭] - 마스터 데이터와 매칭되지 않음")
             
             st.divider()
             
-            # 편집 가능한 필드들
-            col1, col2 = st.columns(2)
+            # 상세 정보 편집
+            col3, col4, col5 = st.columns(3)
             
-            with col1:
-                item['test_name'] = st.text_input(
-                    "시험명",
-                    value=item.get('test_name', ''),
-                    key=f"test_name_{idx}"
-                )
-                
-                item['category'] = st.text_input(
-                    "분류",
-                    value=item.get('category', ''),
-                    key=f"category_{idx}"
-                )
-                
+            with col3:
                 item['ref_standard'] = st.text_input(
                     "참조 규격",
                     value=item.get('ref_standard', ''),
-                    key=f"ref_standard_{idx}"
+                    key=f"ref_{idx}"
                 )
-                
                 item['sample_assembly'] = st.text_input(
                     "시료 구성",
                     value=item.get('sample_assembly', ''),
-                    key=f"sample_assembly_{idx}"
+                    key=f"assembly_{idx}"
                 )
             
-            with col2:
+            with col4:
                 item['test_sample_no'] = st.text_input(
                     "샘플 번호",
                     value=item.get('test_sample_no', ''),
-                    key=f"test_sample_no_{idx}"
+                    key=f"sample_no_{idx}"
                 )
-                
                 item['sample_count'] = st.text_input(
                     "시료 수",
                     value=item.get('sample_count', ''),
-                    key=f"sample_count_{idx}"
+                    key=f"count_{idx}"
                 )
-                
+            
+            with col5:
                 item['test_duration'] = st.text_input(
-                    "시험 기간 (일)",
+                    "소요 기간 (일)",
                     value=item.get('test_duration', ''),
-                    key=f"test_duration_{idx}"
+                    key=f"duration_{idx}"
                 )
-                
                 item['test_equipment'] = st.text_input(
                     "시험 장비",
                     value=item.get('test_equipment', ''),
-                    key=f"test_equipment_{idx}"
+                    key=f"equipment_{idx}"
                 )
             
-            # test_master_id는 읽기 전용
-            st.text_input(
-                "마스터 ID (읽기 전용)",
-                value=item.get('test_master_id', ''),
-                key=f"test_master_id_{idx}",
-                disabled=True
-            )
-            
-            # custom_specs 편집
-            st.markdown("#### Custom Specifications")
+            # Custom Specs
+            st.markdown("**특수 조건 (Custom Specs)**")
             custom_specs = item.get('custom_specs', {})
             
-            if isinstance(custom_specs, dict):
+            if custom_specs:
                 for key, value in custom_specs.items():
-                    custom_specs[key] = st.text_input(
+                    custom_specs[key] = st.text_area(
                         key,
                         value=value,
-                        key=f"custom_{idx}_{key}"
+                        key=f"custom_{idx}_{key}",
+                        height=100
                     )
-                item['custom_specs'] = custom_specs
+            
+            item['custom_specs'] = custom_specs
     
-    st.divider()
+    # 버튼
+    col_btn1, col_btn2 = st.columns(2)
     
-    # 버튼들
-    col1, col2, col3 = st.columns([1, 1, 2])
-    
-    with col1:
-        # 3.2.2. 계획서 생성 버튼
-        if st.button("📋 계획서 생성", use_container_width=True):
+    with col_btn1:
+        if st.button("📄 계획서 생성", type="primary", use_container_width=True):
             # 데이터 저장
-            db.update_request_final_data(
-                st.session_state.current_request['id'],
-                final_data
+            st.session_state.db_manager.update_request_final_data(
+                st.session_state.selected_request_id,
+                test_items
             )
             
-            # 마스터 데이터 업데이트
-            for item in final_data:
-                if item.get('test_master_id') and item.get('test_name_original'):
-                    db.update_master_aliases(
-                        item['test_master_id'],
-                        item['test_name_original']
-                    )
-                elif not item.get('test_master_id'):
+            # 시험 항목 DB에 저장
+            test_item_ids = st.session_state.db_manager.add_test_items(
+                test_items,
+                st.session_state.selected_request_id
+            )
+            
+            # 마스터 업데이트
+            for item in test_items:
+                if item.get('test_master_id'):
+                    # 유사어 추가
+                    if item.get('test_name_original'):
+                        st.session_state.db_manager.update_master_aliases(
+                            item['test_master_id'],
+                            item['test_name_original']
+                        )
+                else:
                     # 새 마스터 추가
-                    db.add_master_test(
-                        std_name=item.get('test_name', ''),
-                        std_category=item.get('category', ''),
-                        ref_standard=item.get('ref_standard', ''),
-                        aliases=[item.get('test_name_original', '')]
-                    )
+                    new_master_id = st.session_state.db_manager.add_master(item)
+                    item['test_master_id'] = new_master_id
             
             st.success("✅ 데이터가 저장되었습니다!")
-            st.session_state.current_page = "plan_draft"
+            st.session_state.current_page = 'plan_creation'
             st.rerun()
     
-    with col2:
-        # 3.2.3. 의뢰 데이터 저장 버튼
-        if st.button("💾 데이터 저장", use_container_width=True):
-            db.update_request_final_data(
-                st.session_state.current_request['id'],
-                final_data
+    with col_btn2:
+        if st.button("💾 의뢰 데이터 저장", use_container_width=True):
+            # 데이터 저장
+            st.session_state.db_manager.update_request_final_data(
+                st.session_state.selected_request_id,
+                test_items
             )
             
-            # 마스터 데이터 업데이트
-            for item in final_data:
-                if item.get('test_master_id') and item.get('test_name_original'):
-                    db.update_master_aliases(
-                        item['test_master_id'],
-                        item['test_name_original']
-                    )
-                elif not item.get('test_master_id'):
-                    # 새 마스터 추가
-                    db.add_master_test(
-                        std_name=item.get('test_name', ''),
-                        std_category=item.get('category', ''),
-                        ref_standard=item.get('ref_standard', ''),
-                        aliases=[item.get('test_name_original', '')]
-                    )
+            # 시험 항목 DB에 저장
+            test_item_ids = st.session_state.db_manager.add_test_items(
+                test_items,
+                st.session_state.selected_request_id
+            )
+            
+            # 마스터 업데이트
+            for item in test_items:
+                if item.get('test_master_id'):
+                    if item.get('test_name_original'):
+                        st.session_state.db_manager.update_master_aliases(
+                            item['test_master_id'],
+                            item['test_name_original']
+                        )
+                else:
+                    new_master_id = st.session_state.db_manager.add_master(item)
+                    item['test_master_id'] = new_master_id
             
             st.success("✅ 데이터가 저장되었습니다!")
 
-
-def page_plan_draft():
-    """3.3. 계획서 초안 작성 화면"""
-    st.title("📋 계획서 초안 작성")
+def page_plan_creation():
+    """계획서 작성 화면"""
+    st.title("📄 시험 계획서 초안 작성")
     
-    if not st.session_state.current_request:
-        st.warning("의뢰를 선택해주세요.")
+    if not st.session_state.current_test_items:
+        st.warning("시험 항목 데이터가 없습니다.")
         return
     
-    # 3.3.1. 시험 계획서 출력 박스
-    st.markdown("### 시험 항목 목록")
+    # 계획서 생성
+    if not st.session_state.current_plan:
+        with st.spinner("계획서를 생성하는 중..."):
+            plan_data = st.session_state.plan_generator.generate_plan(
+                st.session_state.current_test_items
+            )
+            st.session_state.current_plan = plan_data
     
-    final_data = st.session_state.current_request.get('final_data', [])
-    
-    if not final_data:
-        st.warning("시험 항목이 없습니다.")
-        return
+    st.subheader("시험 계획서 초안")
     
     # 샘플 데이터 로드 버튼
     if st.button("🔄 샘플 데이터 로드"):
-        sample_data = [
-            {
-                "test_name": "Functional Test",
-                "category": "Operational Test",
-                "ref_standard": "",
-                "sample_assembly": "HVAC",
-                "test_sample_no": "S001",
-                "sample_count": "3",
-                "test_duration": "1",
-                "test_equipment": "Test Bench"
-            },
-            {
-                "test_name": "High Temperature Test",
-                "category": "Environmental Test",
-                "ref_standard": "ISO 16750-4",
-                "sample_assembly": "Motor only",
-                "test_sample_no": "S002",
-                "sample_count": "3",
-                "test_duration": "5",
-                "test_equipment": "Temperature Chamber"
-            }
-        ]
-        final_data = sample_data
-        st.session_state.current_request['final_data'] = final_data
+        st.session_state.current_plan = []
         st.rerun()
     
-    # 그룹별로 분류
-    grouped_data = {}
-    for item in final_data:
-        category = item.get('category', 'Other')
-        if category not in grouped_data:
-            grouped_data[category] = []
-        grouped_data[category].append(item)
+    # 카테고리별로 그룹화하여 표시
+    current_category = None
     
-    # 테이블 형태로 표시
-    for category, items in grouped_data.items():
-        st.markdown(f"#### {category}")
+    for idx, item in enumerate(st.session_state.current_plan):
+        # 카테고리 헤더
+        if item['_category'] != current_category:
+            current_category = item['_category']
+            st.markdown(f"### {current_category}")
         
-        # 데이터프레임 생성
-        df_data = []
-        for item in items:
-            df_data.append({
-                "시험명": item.get('test_name', ''),
-                "참조 규격": item.get('ref_standard', ''),
-                "시료 구성": item.get('sample_assembly', ''),
-                "샘플 번호": item.get('test_sample_no', ''),
-                "시료 수": item.get('sample_count', ''),
-                "시험 기간": item.get('test_duration', ''),
-                "시험 장비": item.get('test_equipment', '')
-            })
-        
-        df = pd.DataFrame(df_data)
-        st.dataframe(df, use_container_width=True)
-    
-    st.divider()
-    
-    # CRUD 기능
-    st.markdown("### ✏️ 시험 항목 편집")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("➕ 항목 추가", use_container_width=True):
-            st.session_state.show_add_modal = True
-    
-    with col2:
-        if st.button("🗑️ 항목 삭제", use_container_width=True):
-            st.session_state.show_delete_modal = True
-    
-    # 추가 모달
-    if st.session_state.get('show_add_modal', False):
-        with st.form("add_item_form"):
-            st.markdown("#### 새 시험 항목 추가")
-            
-            col1, col2 = st.columns(2)
+        # 항목 편집
+        with st.expander(f"{item['No']}. {item['Test Title']}", expanded=False):
+            col1, col2, col3 = st.columns(3)
             
             with col1:
-                new_test_name = st.text_input("시험명")
-                new_category = st.text_input("분류")
-                new_ref_standard = st.text_input("참조 규격")
-                new_sample_assembly = st.text_input("시료 구성")
+                item['Group'] = st.selectbox(
+                    "Group",
+                    options=['Individual', 'Sequence'],
+                    index=0 if item['Group'] == 'Individual' else 1,
+                    key=f"group_{idx}"
+                )
+                item['Specification'] = st.text_input(
+                    "Specification",
+                    value=item['Specification'],
+                    key=f"spec_{idx}"
+                )
+                item['§'] = st.text_input(
+                    "§",
+                    value=item['§'],
+                    key=f"section_{idx}"
+                )
             
             with col2:
-                new_test_sample_no = st.text_input("샘플 번호")
-                new_sample_count = st.text_input("시료 수")
-                new_test_duration = st.text_input("시험 기간")
-                new_test_equipment = st.text_input("시험 장비")
+                item['Test Title'] = st.text_input(
+                    "Test Title",
+                    value=item['Test Title'],
+                    key=f"title_{idx}"
+                )
+                item['Component'] = st.text_input(
+                    "Component",
+                    value=item['Component'],
+                    key=f"component_{idx}"
+                )
+                item['Test by'] = st.text_input(
+                    "Test by",
+                    value=item['Test by'],
+                    key=f"testby_{idx}"
+                )
             
-            col_submit, col_cancel = st.columns(2)
+            with col3:
+                item['Sample quantity'] = st.text_input(
+                    "Sample quantity",
+                    value=item['Sample quantity'],
+                    key=f"quantity_{idx}"
+                )
+                item['Test Timing'] = st.text_input(
+                    "Test Timing",
+                    value=item['Test Timing'],
+                    key=f"timing_{idx}"
+                )
             
-            with col_submit:
-                if st.form_submit_button("추가", use_container_width=True):
-                    new_item = {
-                        "test_name": new_test_name,
-                        "category": new_category,
-                        "ref_standard": new_ref_standard,
-                        "sample_assembly": new_sample_assembly,
-                        "test_sample_no": new_test_sample_no,
-                        "sample_count": new_sample_count,
-                        "test_duration": new_test_duration,
-                        "test_equipment": new_test_equipment
-                    }
-                    final_data.append(new_item)
-                    st.session_state.current_request['final_data'] = final_data
-                    st.session_state.show_add_modal = False
-                    st.success("✅ 항목이 추가되었습니다!")
-                    st.rerun()
-            
-            with col_cancel:
-                if st.form_submit_button("취소", use_container_width=True):
-                    st.session_state.show_add_modal = False
-                    st.rerun()
-    
-    # 삭제 모달
-    if st.session_state.get('show_delete_modal', False):
-        st.markdown("#### 항목 삭제")
-        
-        delete_options = [item.get('test_name', f'항목 {i}') for i, item in enumerate(final_data)]
-        selected_delete = st.selectbox("삭제할 항목 선택", delete_options)
-        
-        col_delete, col_cancel = st.columns(2)
-        
-        with col_delete:
-            if st.button("삭제 확인", use_container_width=True):
-                delete_idx = delete_options.index(selected_delete)
-                
-                # Functional Test 삭제 시 재확인
-                if "functional" in final_data[delete_idx].get('test_name', '').lower():
-                    if st.checkbox("⚠️ Functional Test를 삭제하시겠습니까?"):
-                        final_data.pop(delete_idx)
-                        st.session_state.current_request['final_data'] = final_data
-                        st.session_state.show_delete_modal = False
-                        st.success("✅ 항목이 삭제되었습니다!")
+            # 삭제 버튼
+            if item['_is_functional']:
+                if st.button(f"🗑️ 삭제 (Functional Test)", key=f"del_{idx}"):
+                    if st.checkbox(f"정말 삭제하시겠습니까? (중요 항목)", key=f"confirm_{idx}"):
+                        st.session_state.current_plan.pop(idx)
                         st.rerun()
-                else:
-                    final_data.pop(delete_idx)
-                    st.session_state.current_request['final_data'] = final_data
-                    st.session_state.show_delete_modal = False
-                    st.success("✅ 항목이 삭제되었습니다!")
+            else:
+                if st.button(f"🗑️ 삭제", key=f"del_{idx}"):
+                    st.session_state.current_plan.pop(idx)
                     st.rerun()
-        
-        with col_cancel:
-            if st.button("취소", use_container_width=True):
-                st.session_state.show_delete_modal = False
-                st.rerun()
     
+    # 항목 추가
     st.divider()
+    with st.expander("➕ 새 시험 항목 추가"):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            new_group = st.selectbox("Group", options=['Individual', 'Sequence'], key='new_group')
+            new_spec = st.text_input("Specification", key='new_spec')
+            new_section = st.text_input("§", key='new_section')
+        
+        with col2:
+            new_title = st.text_input("Test Title", key='new_title')
+            new_component = st.text_input("Component", key='new_component')
+            new_testby = st.text_input("Test by", key='new_testby')
+        
+        with col3:
+            new_quantity = st.text_input("Sample quantity", key='new_quantity')
+            new_timing = st.text_input("Test Timing", key='new_timing')
+        
+        if st.button("추가"):
+            if new_title:
+                new_item = {
+                    'No': len(st.session_state.current_plan) + 1,
+                    'Group': new_group,
+                    'Specification': new_spec,
+                    '§': new_section,
+                    'Test Title': new_title,
+                    'Component': new_component,
+                    'Test by': new_testby,
+                    'Sample quantity': new_quantity,
+                    'Test Timing': new_timing,
+                    'Start': '',
+                    'End': '',
+                    'OK/NOK': '',
+                    'Result': '',
+                    'Remark': '',
+                    'Customer Feedback': '',
+                    '_category': 'Other',
+                    '_is_functional': False,
+                    '_original_item': {}
+                }
+                st.session_state.current_plan.append(new_item)
+                st.success("✅ 항목이 추가되었습니다!")
+                st.rerun()
+            else:
+                st.error("Test Title을 입력해주세요.")
     
-    # 버튼들
-    col1, col2, col3 = st.columns([1, 1, 2])
+    # 버튼
+    st.divider()
+    col_btn1, col_btn2 = st.columns(2)
     
-    with col1:
-        # 3.3.2. 계획서 저장 버튼
-        if st.button("💾 계획서 저장 (Excel)", use_container_width=True):
-            excel_file = export_manager.export_to_excel(
-                final_data,
-                st.session_state.current_user['user_name'],
-                st.session_state.current_request.get('project', 'Project')
+    with col_btn1:
+        if st.button("💾 계획서 초안 저장 (Excel)", type="primary", use_container_width=True):
+            # 사용자 이름 가져오기
+            users = st.session_state.db_manager.get_all_users()
+            user = users[users['id'] == st.session_state.selected_user_id]
+            user_name = user.iloc[0]['user_name'] if len(user) > 0 else 'User'
+            
+            # 엑셀 파일 생성
+            filename = st.session_state.plan_generator.export_to_excel(
+                st.session_state.current_plan,
+                user_name
             )
             
-            st.download_button(
-                "⬇️ Excel 다운로드",
-                excel_file,
-                f"TestPlan_{st.session_state.current_user['user_name']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+            # 다운로드 버튼
+            with open(filename, 'rb') as f:
+                st.download_button(
+                    label="📥 Excel 파일 다운로드",
+                    data=f,
+                    file_name=filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
+            st.success("✅ 계획서가 저장되었습니다!")
     
-    with col2:
-        # 3.3.3. 일정 생성 버튼
+    with col_btn2:
         if st.button("📅 일정 생성", use_container_width=True):
-            st.session_state.schedule_data = final_data
-            st.session_state.current_page = "schedule_management"
+            st.session_state.current_page = 'scheduling'
             st.rerun()
 
-
-def page_schedule_management():
-    """3.4. 시험 일정 관리 화면"""
-    st.title("📅 시험 일정 관리")
+def page_scheduling():
+    """일정 스케줄링 화면"""
+    st.title("📅 시험 일정 스케줄링")
     
-    if not st.session_state.schedule_data:
-        st.warning("일정 데이터가 없습니다. 계획서를 먼저 작성해주세요.")
+    if not st.session_state.current_plan:
+        st.warning("계획서 데이터가 없습니다.")
         return
     
-    # 3.4.1. 타임라인(d-day) 확인 박스
-    st.markdown("### 시험 일정 (Gantt Chart)")
+    # 계획서에서 시험 항목 추출
+    test_items_for_schedule = []
+    for item in st.session_state.current_plan:
+        original_item = item.get('_original_item', {})
+        if not original_item:
+            original_item = {
+                'test_name': item['Test Title'],
+                'category': item.get('_category', 'Other'),
+                'test_duration': '1',
+                'sample_count': item.get('Sample quantity', '3')
+            }
+        test_items_for_schedule.append(original_item)
     
-    schedule_data = st.session_state.schedule_data
+    # 일정 생성 (D-day)
+    if not st.session_state.current_schedule:
+        with st.spinner("일정을 생성하는 중..."):
+            schedule = st.session_state.scheduler.create_schedule(test_items_for_schedule)
+            st.session_state.current_schedule = schedule
     
-    # 일정 생성
-    schedules = schedule_manager.generate_schedule(
+    st.subheader("타임라인 (D-day)")
+    
+    # Gantt 차트 표시
+    schedule_data = []
+    for item in st.session_state.current_schedule:
+        schedule_data.append({
+            'test_name': item['test_item'].get('test_name', 'Unknown'),
+            'category': item['test_item'].get('category', 'Other'),
+            'start_day': item['start_day'],
+            'end_day': item['end_day'],
+            'duration': item['duration']
+        })
+    
+    fig = create_gantt_chart(
         schedule_data,
-        st.session_state.current_request['id']
+        color_by='category',
+        title='시험 일정 (D-day 기준)'
     )
     
-    # Gantt Chart 생성
-    fig = schedule_manager.create_gantt_chart(schedules, use_dday=True)
-    st.plotly_chart(fig, use_container_width=True)
+    if fig:
+        st.plotly_chart(fig, use_container_width=True)
     
-    # 일정 테이블 표시
-    st.markdown("### 📋 일정 상세")
+    # 일정 테이블
+    st.dataframe(
+        pd.DataFrame(schedule_data),
+        use_container_width=True
+    )
     
-    df_schedule = pd.DataFrame(schedules)
-    if not df_schedule.empty:
-        display_df = df_schedule[['test_name', 'start_day', 'end_day', 'duration']]
-        display_df.columns = ['시험명', '시작일 (D+)', '종료일 (D+)', '소요 기간 (일)']
-        st.dataframe(display_df, use_container_width=True)
-    
+    # 시작일 설정 및 저장
     st.divider()
+    st.subheader("일정 저장")
     
-    # 3.4.2. 타임라인(d-day) 저장 버튼
-    col1, col2, col3 = st.columns([1, 1, 2])
+    # 기본 시작일 설정
+    last_end_date = st.session_state.db_manager.get_last_end_date(st.session_state.selected_user_id)
+    if last_end_date:
+        default_start = last_end_date + timedelta(days=1)
+    else:
+        default_start = datetime.now()
+    
+    start_date = st.date_input(
+        "시험 시작일",
+        value=default_start,
+        key='start_date_input'
+    )
+    
+    if st.button("💾 일정 저장", type="primary", use_container_width=True):
+        # 날짜로 변환
+        dated_schedule = st.session_state.scheduler.convert_to_dates(
+            st.session_state.current_schedule,
+            start_date.strftime('%Y-%m-%d')
+        )
+        
+        # 시험 항목 ID 가져오기
+        test_item_ids = st.session_state.db_manager.get_test_items_by_request(
+            st.session_state.selected_request_id
+        )
+        test_item_ids = [item['id'] for item in test_item_ids]
+        
+        # 일정 저장
+        st.session_state.scheduler.save_schedule(dated_schedule, test_item_ids)
+        
+        st.success("✅ 일정이 저장되었습니다!")
+        st.session_state.current_page = 'schedule_view'
+        st.rerun()
+
+def page_schedule_view():
+    """전체 일정 보기 화면"""
+    st.title("📆 전체 시험 일정 보기")
+    
+    if not st.session_state.selected_user_id:
+        st.warning("사용자를 먼저 선택해주세요.")
+        return
+    
+    # 월 선택
+    col1, col2 = st.columns([3, 1])
     
     with col1:
-        if st.button("💾 일정 저장", use_container_width=True):
-            db.save_schedules(
-                st.session_state.current_user['id'],
-                st.session_state.current_request['id'],
-                schedules
-            )
-            st.success("✅ 일정이 저장되었습니다!")
-
-
-def main():
-    """메인 함수"""
-    render_sidebar()
+        current_month = datetime.now().strftime('%Y-%m')
+        selected_month = st.text_input("조회할 월 (YYYY-MM)", value=current_month, key='month_input')
     
-    # 현재 페이지 렌더링
-    if st.session_state.current_page == "user_selection":
-        page_user_selection()
-    elif st.session_state.current_page == "test_spec_edit":
-        page_test_spec_edit()
-    elif st.session_state.current_page == "plan_draft":
-        page_plan_draft()
-    elif st.session_state.current_page == "schedule_management":
-        page_schedule_management()
+    with col2:
+        view_mode = st.selectbox("보기 모드", options=['Gantt Chart', 'Calendar'], key='view_mode')
+    
+    # 일정 데이터 가져오기
+    schedule_df = st.session_state.db_manager.get_schedule_by_user(
+        st.session_state.selected_user_id,
+        selected_month
+    )
+    
+    if len(schedule_df) == 0:
+        st.info("해당 월에 등록된 일정이 없습니다.")
+        return
+    
+    # 시험 항목 정보 결합
+    test_items_df = pd.read_csv(TEST_ITEM_FILE, encoding='utf-8-sig')
+    schedule_with_info = schedule_df.merge(
+        test_items_df[['id', 'test_name', 'request_id', 'category']],
+        left_on='test_item_id',
+        right_on='id',
+        how='left'
+    )
+    
+    # 의뢰 정보 결합
+    requests_df = pd.read_csv(REQUEST_INFO_FILE, encoding='utf-8-sig')
+    schedule_with_info = schedule_with_info.merge(
+        requests_df[['id', 'client', 'project']],
+        left_on='request_id',
+        right_on='id',
+        how='left',
+        suffixes=('', '_req')
+    )
+    
+    if view_mode == 'Gantt Chart':
+        st.subheader(f"{selected_month} 시험 일정")
+        
+        # Gantt 차트
+        fig = create_gantt_chart(
+            schedule_with_info.to_dict('records'),
+            color_by='request',
+            title=f'{selected_month} 전체 시험 일정'
+        )
+        
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # 일정 테이블
+        st.dataframe(
+            schedule_with_info[[
+                'test_name', 'category', 'client', 'project',
+                'start_date', 'end_date', 'duration', 'status'
+            ]],
+            use_container_width=True
+        )
+    
+    else:  # Calendar View
+        st.subheader(f"{selected_month} 캘린더 뷰")
+        
+        calendar_data = create_calendar_view(
+            schedule_with_info.to_dict('records'),
+            selected_month
+        )
+        
+        if calendar_data is not None and len(calendar_data) > 0:
+            # 주별로 나누어 표시
+            calendar_data['week'] = (calendar_data['day'] - 1) // 7
+            
+            for week in calendar_data['week'].unique():
+                week_data = calendar_data[calendar_data['week'] == week]
+                
+                cols = st.columns(7)
+                for idx, (_, day_data) in enumerate(week_data.iterrows()):
+                    if idx < 7:
+                        with cols[idx]:
+                            st.markdown(f"**{day_data['weekday'][:3]}**")
+                            st.markdown(f"### {day_data['day']}")
+                            
+                            if day_data['test_count'] > 0:
+                                st.info(f"📋 {day_data['test_count']}개 시험")
+                                with st.expander("상세"):
+                                    st.text(day_data['tests'])
+                            else:
+                                st.text("일정 없음")
 
+# 페이지 라우팅
+page_functions = {
+    'user_selection': page_user_selection,
+    'test_spec_edit': page_test_spec_edit,
+    'plan_creation': page_plan_creation,
+    'scheduling': page_scheduling,
+    'schedule_view': page_schedule_view
+}
 
-if __name__ == "__main__":
-    main()
+# 현재 페이지 렌더링
+if st.session_state.current_page in page_functions:
+    page_functions[st.session_state.current_page]()
+else:
+    st.error("페이지를 찾을 수 없습니다.")
