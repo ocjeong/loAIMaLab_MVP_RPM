@@ -1,4 +1,5 @@
 import os
+import streamlit as st
 
 # Gemini API 설정
 # GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
