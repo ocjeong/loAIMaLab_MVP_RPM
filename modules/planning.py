@@ -84,8 +84,13 @@ class PlanningManager:
         components = [item.get('sample_assembly', '') for item in test_items if item.get('sample_assembly')]
         most_common = max(set(components), key=components.count) if components else 'Motor only'
         
-        # 전체 시료 수 계산
-        total_samples = sum(int(item.get('sample_count', 3)) for item in test_items)
+        # 전체 시료 수 계산 - 빈 문자열을 '3'으로 대체
+        total_samples = sum(
+            int(item.get('sample_count') or '3') 
+            if (item.get('sample_count') or '').strip().isdigit() 
+            else 3 
+            for item in test_items
+        )
         
         return {
             'test_name': 'Functional Test',
