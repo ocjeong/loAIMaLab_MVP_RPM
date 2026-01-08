@@ -8,7 +8,7 @@ class LLMHandler:
     def __init__(self, api_key: str):
         """Gemini API 초기화"""
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
     
     def encode_file_to_base64(self, file_bytes: bytes) -> str:
         """파일을 Base64로 인코딩"""
