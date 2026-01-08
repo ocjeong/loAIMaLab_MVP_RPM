@@ -524,7 +524,7 @@ def page_plan_creation():
     st.subheader("시험 계획서 초안")
     
     # 샘플 데이터 로드 버튼
-    if st.button("🔄 샘플 데이터 로드"):
+    if st.button("🔄 추출 데이터 로드"): # 문구 수
         st.session_state.current_plan = []
         st.rerun()
     
@@ -884,3 +884,4 @@ if st.session_state.current_page in page_functions:
     page_functions[st.session_state.current_page]()
 else:
     st.error("페이지를 찾을 수 없습니다.")
+
