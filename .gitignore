@@ -26,23 +26,19 @@ wheels/
 # Streamlit
 .streamlit/secrets.toml
 
-# Data files
-data/*.csv
+# Database
+database/
+
+# Excel files
+*.xlsx
+*.xls
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Environment
-.env
-.env.local
-
-# Logs
-*.log
