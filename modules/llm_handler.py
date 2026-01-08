@@ -60,21 +60,25 @@ class LLMHandler:
 {master_json}
 """
         return prompt
+
     
     def extract_test_specifications(self, file_bytes: bytes, 
                                    mime_type: str, 
                                    master_data: List[Dict]) -> Optional[Dict]:
-        """문서에서 시험 규격 추출"""
+        """문서에서 시험 규격 추출 (Base64 inline data 방식)"""
         try:
             prompt = self.get_extraction_prompt(master_data)
             
-            # 파일 업로드
-            file = genai.upload_file(path=None, mime_type=mime_type)
+            # Base64 인코딩
+            base64_data = base64.b64encode(file_bytes).decode('utf-8')
             
-            # API 호출
+            # inline_data로 전달
             response = self.model.generate_content([
                 prompt,
-                file
+                {
+                    "mime_type": mime_type,
+                    "data": base64_data
+                }
             ])
             
             # JSON 추출
@@ -97,3 +101,40 @@ class LLMHandler:
         except Exception as e:
             print(f"LLM 추출 오류: {str(e)}")
             return None
+
+    # def extract_test_specifications(self, file_bytes: bytes, 
+    #                                mime_type: str, 
+    #                                master_data: List[Dict]) -> Optional[Dict]:
+    #     """문서에서 시험 규격 추출"""
+    #     try:
+    #         prompt = self.get_extraction_prompt(master_data)
+            
+    #         # 파일 업로드
+    #         file = genai.upload_file(path=None, mime_type=mime_type)
+            
+    #         # API 호출
+    #         response = self.model.generate_content([
+    #             prompt,
+    #             file
+    #         ])
+            
+    #         # JSON 추출
+    #         response_text = response.text.strip()
+            
+    #         # 마크다운 코드 블록 제거
+    #         if response_text.startswith("```json"):
+    #             response_text = response_text[7:]
+    #         if response_text.startswith("```"):
+    #             response_text = response_text[3:]
+    #         if response_text.endswith("```"):
+    #             response_text = response_text[:-3]
+            
+    #         response_text = response_text.strip()
+            
+    #         # JSON 파싱
+    #         result = json.loads(response_text)
+    #         return result
+            
+    #     except Exception as e:
+    #         print(f"LLM 추출 오류: {str(e)}")
+    #         return None
